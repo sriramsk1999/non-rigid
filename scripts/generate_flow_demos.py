@@ -15,15 +15,17 @@ from rpad.pybullet_envs.pm_suction import PMObjectEnv
 if __name__ == "__main__":
     OBJ_ID = "7273"
     NUM_DEMOS = 8
+    NUM_VAL_DEMOS = 2
     PM_DIR = Path(os.path.expanduser("~/datasets/partnet-mobility/dataset"))
     # NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow"))
     # NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow_multi"))
     NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow_uniform"))
     GUI = True
     USE_EGL = not GUI
-    GENERATE_TRAIN = True
-    GENERATE_TEST = True
-    angles = [np.pi/6, np.pi/3]
+    GENERATE_TRAIN = False
+    GENERATE_VAL = True
+    GENERATE_TEST = False
+    # angles = [np.pi/6, np.pi/3]
     # 16 angles even spaced from 0 to pi/2
     angles = np.linspace(0, np.pi/2, 16)
 
@@ -58,6 +60,24 @@ if __name__ == "__main__":
                 pc_angle_i = np.concatenate((pc_start_i, flow_angle_i, seg_i), axis=-1)
                 angles_i = np.array([obs["joint_angle"], angle])
                 np.savez(NR_DIR / "train" / f"demo_{i*len(angles) + j}.npz", pc=pc_angle_i, angles=angles_i)
+
+    if GENERATE_VAL:
+        os.makedirs(NR_DIR / "val", exist_ok=True)
+        for i in range(NUM_VAL_DEMOS):
+            print(f'Generating validation demo {i}...')
+            # fps sampling
+            fps_idx = fps(torch.as_tensor(obs['pc']).to(device="cuda"), random_start=True, ratio=0.025)
+            fps_idx = fps_idx.cpu().numpy()
+
+            # get all downsampled obs, obs_rot, seg, start_angle, and goal_angle
+            pc_start_i = obs['pc'][fps_idx]
+            seg_i = obs['seg'][fps_idx][:, np.newaxis]
+
+            goal_flows_i = [obs['pc'][fps_idx] - pc_start_i for obs in obs_rots]
+            goal_flows_i = np.stack(goal_flows_i, axis=0)
+            pc_angle_i = np.concatenate((pc_start_i, seg_i), axis=-1)
+            angles_i = np.array([obs["joint_angle"], *angles])
+            np.savez(NR_DIR / "val" / f"demo_{i}.npz", pc=pc_angle_i, goals=goal_flows_i, angles=angles_i)
 
     if GENERATE_TEST:
         os.makedirs(NR_DIR / "test", exist_ok=True)
