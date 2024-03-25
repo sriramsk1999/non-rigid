@@ -2,6 +2,6 @@ name: df_base
 in_channels: 6
 learn_sigma: True
 dit_arch: DiT_pcu_xS
-sample_size: 1867
+sample_size: 1200
 diff_train_steps: 100
 diff_inference_steps: 100

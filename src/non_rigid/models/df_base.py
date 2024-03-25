@@ -63,14 +63,12 @@ class DiffusionFlowTrainingModule(L.LightningModule):
             timestep_respacing=None,
             diffusion_steps=self.diff_train_steps,
         )
-
-        self.mode_distribution_cache = {"x": None, "y": None}
+        # self.mode_distribution_cache = {"x": None, "y": None}
 
     def forward(self, x, t, mode="train"):
         # get flow and pos
-        pc, _ = x
-        pos = pc[..., :3]
-        flow = pc[..., 3:6]
+        pos, flow, _, _, _  = x
+
         # channel first
         pos = torch.transpose(pos, -1, -2)
         flow = torch.transpose(flow, -1, -2)
@@ -89,103 +87,37 @@ class DiffusionFlowTrainingModule(L.LightningModule):
         )
         return None, loss
     
-    # this is only for inference?
-    def predict(self):
+    # TODO:this is only for inference
+    @torch.no_grad()
+    def predict(self, batch):
         pass
 
     def predict_wta(self, batch, mode):
-        # TODO: this will not work if batch size != 1
-        assert batch[0].shape[0] == 1, "WTA requires batch size of 1"
-        pc, goals, angles = batch
-        angles = angles.squeeze(0)
-        seg = pc[..., 3].bool().expand(self.num_wta_trials, -1)
-        pos = pc[..., :3].expand(self.num_wta_trials, -1, -1).transpose(-1, -2)
+        pos, gt_flow, seg, _, goal = batch
+        # reshaping and expanding for wta
+        bs = pos.shape[0]
+        pos = pos.transpose(-1, -2).unsqueeze(1).expand(-1, self.num_wta_trials, -1, -1).reshape(bs * self.num_wta_trials, -1, self.sample_size)
+        gt_flow = gt_flow.unsqueeze(1).expand(-1, self.num_wta_trials, -1, -1).reshape(bs * self.num_wta_trials, self.sample_size, -1)
+        seg = seg.unsqueeze(1).expand(-1, self.num_wta_trials, -1).reshape(bs * self.num_wta_trials, -1)
         # generating latents and running diffusion
         model_kwargs = dict(pos=pos)
         z = torch.randn(
-            self.num_wta_trials, 3, self.sample_size, device=self.device
+            bs * self.num_wta_trials, 3, self.sample_size, device=self.device
         )
         pred_flow, results = self.diffusion.p_sample_loop(
             self.network, z.shape, z, clip_denoised=False,
             model_kwargs=model_kwargs, progress=True, device=self.device
         )
         pred_flow = pred_flow.permute(0, 2, 1)
-
-        cos_sim_wtas = []
-        rmse_wtas = []
-        pred_flows_wtas = []
-        pairwise_dists = []
-        # computing wta errors for each goal
-        for i in range(goals.shape[1]):
-            # extracting goal flow
-            goal_i = goals[:, i, ...].expand(self.num_wta_trials, -1, -1)
-            # computing errors
-            cos_sim = flow_cos_sim(pred_flow, goal_i, mask=True, seg=seg)
-            rmse = flow_rmse(pred_flow, goal_i, mask=False, seg=None)
-            # wta based on rmse
-            winner = torch.argmin(rmse, dim=-1)
-            cos_sim_wtas.append(cos_sim[winner])
-            rmse_wtas.append(rmse[winner])
-            pred_flows_wtas.append(pred_flow[winner, ...])
-            # storing rmse's for nn
-            pairwise_dists.append(rmse)
-        # caching mode distributions
-        pairwise_dists = torch.stack(pairwise_dists, dim=0)
-        _, closest_mode = pc_nn(pairwise_dists)
-        mode_freqs = torch.bincount(closest_mode, minlength=goals.shape[1])
-        if self.mode_distribution_cache["x"] is None:
-            self.mode_distribution_cache["x"] = angles[1:]
-            self.mode_distribution_cache["y"] = mode_freqs
-        else:
-            self.mode_distribution_cache["y"] += mode_freqs
-        # logging
-        cos_sim_wtas = torch.stack(cos_sim_wtas, dim=0)
-        rmse_wtas = torch.stack(rmse_wtas, dim=0)
-        pred_flows_wtas = torch.stack(pred_flows_wtas, dim=0)
-        self.log_dict(
-            {
-                f"{mode}_wta/cos_sim": cos_sim_wtas.mean(),
-                f"{mode}_wta/rmse": rmse_wtas.mean(),
-            },
-            add_dataloader_idx=False,
-            prog_bar = True,
-        )
-        return pred_flows_wtas, cos_sim_wtas, rmse_wtas
-        quit()
-        return pred_flows_wtas, cos_sim_wtas, rmse_wtas
-
-        bs = batch[0].shape[0]
-        nt = self.num_wta_trials
-        # TODO: for each val. run through dataset, compute angle-specific metrics
-        pc, _ = batch
-        seg = pc[..., 6].bool().unsqueeze(1).expand(-1, nt, -1)
-        pos = pc[..., :3].unsqueeze(1).expand(-1, nt, -1, -1)
-        flow = pc[..., 3:6].unsqueeze(1).expand(-1, nt, -1, -1)
-        # shaping for diffusion
-        seg = seg.reshape(bs*nt, -1)
-        pos = pos.reshape(bs*nt, self.sample_size, -1).transpose(-1, -2)
-        flow = flow.reshape(bs*nt, self.sample_size, -1)
-        # running diffusion
-        model_kwargs = dict(pos=pos)
-        z = torch.randn(
-            bs*nt, 3, self.sample_size, device=self.device
-        )
-        pred_flow, results = self.diffusion.p_sample_loop(
-            self.network, z.shape, z, clip_denoised=False,
-            model_kwargs=model_kwargs, progress=True, device=self.device
-        )
-        pred_flow = pred_flow.permute(0, 2, 1)
-        # computing errors
-        cos_sim = flow_cos_sim(pred_flow, flow, mask=True, seg=seg).reshape(bs, nt)
-        rmse = flow_rmse(pred_flow, flow, mask=False, seg=None).reshape(bs, nt)
-        pred_flow = pred_flow.reshape(bs, nt, self.sample_size, -1)
-        # wta based on rmse
+        # computing wta errors
+        cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=True, seg=seg).reshape(bs, self.num_wta_trials)
+        rmse = flow_rmse(pred_flow, gt_flow, mask=False, seg=None).reshape(bs, self.num_wta_trials)
+        pred_flow = pred_flow.reshape(bs, self.num_wta_trials, -1, 3)
         winner = torch.argmin(rmse, dim=-1)
+        # logging
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
-        pred_flow_wta = pred_flow[torch.arange(bs), winner, ...]
-
-        # log
+        pred_flows_wta = pred_flow[torch.arange(bs), winner]
         self.log_dict(
             {
                 f"{mode}_wta/cos_sim": cos_sim_wta.mean(),
@@ -194,8 +126,8 @@ class DiffusionFlowTrainingModule(L.LightningModule):
             add_dataloader_idx=False,
             prog_bar = True,
         )
-        # TODO: return best results for visualization purposes?
-        return pred_flow_wta, cos_sim_wta, rmse_wta
+        return pred_flows_wta, cos_sim_wta, rmse_wta
+    
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -217,11 +149,10 @@ class DiffusionFlowTrainingModule(L.LightningModule):
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
         # if new epoch, clear cache
-        if batch_idx == 0:
-            self.mode_distribution_cache = {"x": None, "y": None}
+        # if batch_idx == 0:
+        #     self.mode_distribution_cache = {"x": None, "y": None}
         with torch.no_grad():
             pred_flows_wtas, cos_sim_wtas, rmse_wtas = self.predict_wta(batch, mode="val")
-        # TODO: viz metrics for pred_flow, cache joint angle specific distributions?
         return {
             "loss": rmse_wtas,
             "cos_sim": cos_sim_wtas,
@@ -231,15 +162,15 @@ class DiffusionFlowTrainingModule(L.LightningModule):
         # no test for now
         pass
 
-    def make_plots(self):
-        # plotting mode distributions as bar chart
-        fig = px.bar(
-            x=self.mode_distribution_cache["x"].cpu(),
-            y=self.mode_distribution_cache["y"].cpu(),
-            labels={"x": "Joint Angle", "y": "Frequency"},
-            title="Mode Distribution",
-        )
-        return {"mode_distribution": fig}
+    # def make_plots(self):
+    #     # plotting mode distributions as bar chart
+    #     fig = px.bar(
+    #         x=self.mode_distribution_cache["x"].cpu(),
+    #         y=self.mode_distribution_cache["y"].cpu(),
+    #         labels={"x": "Joint Angle", "y": "Frequency"},
+    #         title="Mode Distribution",
+    #     )
+    #     return {"mode_distribution": fig}
 
 
 

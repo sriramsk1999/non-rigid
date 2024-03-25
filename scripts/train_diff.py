@@ -55,7 +55,7 @@ def main(cfg):
     ######################################################################
 
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-    data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
+    # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
     datamodule = MicrowaveFlowDataModule(
         root=data_root,
         batch_size=cfg.training.batch_size,
@@ -157,7 +157,7 @@ def main(cfg):
             # LogPredictionSamplesCallback(logger),
             # This checkpoint callback saves the latest model during training, i.e. so we can resume if it crashes.
             # It saves everything, and you can load by referencing last.ckpt.
-            CustomModelPlotsCallback(logger),
+            # CustomModelPlotsCallback(logger),
             ModelCheckpoint(
                 dirpath=cfg.lightning.checkpoint_dir,
                 filename="{epoch}-{step}",
