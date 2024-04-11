@@ -68,6 +68,7 @@ def main(cfg):
         batch_size=cfg.training.batch_size,
         val_batch_size=cfg.training.val_batch_size,
         num_workers=cfg.resources.num_workers,
+        type=cfg.dataset.type,
     )
 
     # datamodule = MicrowaveFlowDataModule(
@@ -199,6 +200,7 @@ def main(cfg):
             #     save_weights_only=True,
             # ),
         ],
+        num_sanity_val_steps=0,
     )
 
     ######################################################################

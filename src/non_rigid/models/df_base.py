@@ -67,7 +67,9 @@ class ArticulatedFlowTrainingModule(L.LightningModule):
 
     def forward(self, x, t, mode="train"):
         # get flow and pos
-        pos, flow, _, _, _  = x
+        # pos, flow, _, _, _, *misc  = x
+        pos = x['pc_init']
+        flow = x['flow']
 
         # channel first
         pos = torch.transpose(pos, -1, -2)
@@ -93,7 +95,12 @@ class ArticulatedFlowTrainingModule(L.LightningModule):
         pass
 
     def predict_wta(self, batch, mode):
-        pos, gt_flow, seg, _, goal = batch
+        # pos, gt_flow, seg, _, goal, *misc = batch
+        pos = batch['pc_init']
+        gt_flow = batch['flow']
+        seg = batch['seg']
+        goal = batch['goal']
+        
         # reshaping and expanding for wta
         bs = pos.shape[0]
         pos = pos.transpose(-1, -2).unsqueeze(1).expand(-1, self.num_wta_trials, -1, -1).reshape(bs * self.num_wta_trials, -1, self.sample_size)

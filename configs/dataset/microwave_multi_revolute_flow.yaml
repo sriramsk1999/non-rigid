@@ -1,0 +1,3 @@
+name: microwave_multi_revolute_flow
+data_dir: "~/datasets/nrp/dataset/demos/microwave-4_flow"
+type: microwave_multi_flow
