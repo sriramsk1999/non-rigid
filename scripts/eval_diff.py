@@ -8,7 +8,7 @@ import wandb
 from pathlib import Path
 import os
 
-from non_rigid.datasets.microwave_flow import MicrowaveFlowDataset, MicrowaveFlowDataModule
+from non_rigid.datasets.microwave_flow import MicrowaveFlowDataset, MicrowaveFlowDataModule, DATASET_FN
 from non_rigid.models.df_base import DiffusionFlowBase, DiffusionFlowTrainingModule
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
@@ -24,7 +24,13 @@ import numpy as np
 
 
 def predict(network, batch, device, diffusion, trials, sample_size):
-    pos, gt_flow, seg, t_wc, goal = batch
+    # pos, gt_flow, seg, t_wc, goal = batch
+    pos = batch['pc_init']
+    gt_flow = batch['flow']
+    seg = batch['seg']
+    t_wc = batch['t_wc']
+    goal = batch['goal']
+    
     pos = pos.to(device)
     gt_flow = gt_flow.to(device)
     seg = seg.to(device)
@@ -49,7 +55,12 @@ def predict(network, batch, device, diffusion, trials, sample_size):
 
 
 def predict_wta(network, batch, device, diffusion, num_wta_trials=50, sample_size=1200):
-    pos, gt_flow, seg, _, goal = batch
+    # pos, gt_flow, seg, _, goal = batch
+    pos = batch['pc_init']
+    gt_flow = batch['flow']
+    seg = batch['seg']
+    goal = batch['goal']
+    
     pos = pos.to(device)
     gt_flow = gt_flow.to(device)
     seg = seg.to(device)
@@ -154,118 +165,131 @@ def main(cfg):
     device = "cuda"
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
     # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
-    train_dataset = MicrowaveFlowDataset(data_root, "train")
-    val_dataset = MicrowaveFlowDataset(data_root, "val")
+    train_dataset = DATASET_FN[cfg.dataset.type](data_root, "train")
+    val_dataset = DATASET_FN[cfg.dataset.type](data_root, "val")
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, shuffle=False)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=4, shuffle=False)
     num_wta_trials = 50
     diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
 
+    get_train_dataset_metrics = False
+    get_val_dataset_metrics = True
+    visualize_all_predictions = True
+    visualize_single_prediction = True
+    visualize_single_prediction_idx = 12
+
     import plotly.express as px
 
     # train dataset metrics
-    cos_wtas = []
-    rmse_wtas = []
-    goals = []
-    for batch in tqdm(train_loader):
-        goals.append(batch[-1])
-        pred_flows_wta, cos_sim_wta, rmse_wta = predict_wta(network, batch, device, diffusion, num_wta_trials=num_wta_trials)
-        cos_wtas.append(cos_sim_wta.cpu())
-        rmse_wtas.append(rmse_wta.cpu())
-    cos_wtas = torch.cat(cos_wtas)
-    rmse_wtas = torch.cat(rmse_wtas)
-    goals = torch.cat(goals)
-    print("Train Cosine Similarity: ", torch.mean(cos_wtas))
-    print("Train RMSE: ", torch.mean(rmse_wtas))
-    fig = px.scatter(x=goals, y=cos_wtas,
-                    labels={"x": "Goal", "y": "Cosine Similarity"},
-                    title="Train Cosine Similarity Distribution")
-    fig.show()
-    fig = px.scatter(x=goals, y=rmse_wtas,
-                    labels={"x": "Goal", "y": "RMSE"},
-                    title="Train RMSE Distribution")
-    fig.show()
+    if get_train_dataset_metrics:
+        cos_wtas = []
+        rmse_wtas = []
+        goals = []
+        for batch in tqdm(train_loader):
+            goals.append(batch['goal'])
+            pred_flows_wta, cos_sim_wta, rmse_wta = predict_wta(network, batch, device, diffusion, num_wta_trials=num_wta_trials)
+            cos_wtas.append(cos_sim_wta.cpu())
+            rmse_wtas.append(rmse_wta.cpu())
+        cos_wtas = torch.cat(cos_wtas)
+        rmse_wtas = torch.cat(rmse_wtas)
+        goals = torch.cat(goals)
+        print("Train Cosine Similarity: ", torch.mean(cos_wtas))
+        print("Train RMSE: ", torch.mean(rmse_wtas))
+        fig = px.scatter(x=goals, y=cos_wtas,
+                        labels={"x": "Goal", "y": "Cosine Similarity"},
+                        title="Train Cosine Similarity Distribution")
+        fig.show()
+        fig = px.scatter(x=goals, y=rmse_wtas,
+                        labels={"x": "Goal", "y": "RMSE"},
+                        title="Train RMSE Distribution")
+        fig.show()
 
 
     # val dataset metrics
-    cos_wtas = []
-    rmse_wtas = []
-    goals = []
-    for batch in tqdm(val_loader):
-        goals.append(batch[-1])
-        pred_flows_wta, cos_sim_wta, rmse_wta = predict_wta(network, batch, device, diffusion, num_wta_trials=num_wta_trials)
-        cos_wtas.append(cos_sim_wta.cpu())
-        rmse_wtas.append(rmse_wta.cpu())
-    cos_wtas = torch.cat(cos_wtas)
-    rmse_wtas = torch.cat(rmse_wtas)
-    goals = torch.cat(goals)
-    print("Val Cosine Similarity: ", torch.mean(cos_wtas))
-    print("Val RMSE: ", torch.mean(rmse_wtas))
-    fig = px.scatter(x=goals, y=cos_wtas, 
-                     labels={"x": "Goal", "y": "Cosine Similarity"},
-                     title="Val. Cosine Similarity Distribution")
-    fig.show()
-    fig = px.scatter(x=goals, y=rmse_wtas,
-                     labels={"x": "Goal", "y": "RMSE"},
-                     title="Val. RMSE Distribution")
-    fig.show()
+    if get_val_dataset_metrics:
+        cos_wtas = []
+        rmse_wtas = []
+        goals = []
+        for batch in tqdm(val_loader):
+            goals.append(batch['goal'])
+            pred_flows_wta, cos_sim_wta, rmse_wta = predict_wta(network, batch, device, diffusion, num_wta_trials=num_wta_trials)
+            cos_wtas.append(cos_sim_wta.cpu())
+            rmse_wtas.append(rmse_wta.cpu())
+        cos_wtas = torch.cat(cos_wtas)
+        rmse_wtas = torch.cat(rmse_wtas)
+        goals = torch.cat(goals)
+        print("Val Cosine Similarity: ", torch.mean(cos_wtas))
+        print("Val RMSE: ", torch.mean(rmse_wtas))
+        fig = px.scatter(x=goals, y=cos_wtas, 
+                        labels={"x": "Goal", "y": "Cosine Similarity"},
+                        title="Val. Cosine Similarity Distribution")
+        fig.show()
+        fig = px.scatter(x=goals, y=rmse_wtas,
+                        labels={"x": "Goal", "y": "RMSE"},
+                        title="Val. RMSE Distribution")
+        fig.show()
 
 
     import rpad.visualize_3d.plots as vpl
-    pred_pcs_t = []
-    gt_pcs_t = []
-    # visualizing predictions
-    for batch in tqdm(val_loader):
-        pos, pred_flow, gt_flow, t_wc, goal = predict(network, batch, device, diffusion, 10, 1200)
-        pred_pc = pos + pred_flow
-        gt_pc = pos[:, 0, ...] + gt_flow[:, 0, ...]
+    if visualize_all_predictions:
+        pred_pcs_t = []
+        gt_pcs_t = []
+        # visualizing predictions
+        for batch in tqdm(val_loader):
+            pos, pred_flow, gt_flow, t_wc, goal = predict(network, batch, device, diffusion, 10, 1200)
+            pred_pc = pos + pred_flow
+            gt_pc = pos[:, 0, ...] + gt_flow[:, 0, ...]
 
-        # transform gt to world frame
-        gt_pc_t = torch.cat([gt_pc.cpu(), torch.ones((gt_pc.shape[0], gt_pc.shape[1], 1))], axis=-1) @ t_wc.permute(0, 2, 1)[..., :3]
-        gt_pc_t = torch.flatten(gt_pc_t, end_dim=-2)
-        gt_pcs_t.append(gt_pc_t.numpy())
+            # transform gt to world frame
+            gt_pc_t = torch.cat([gt_pc.cpu(), torch.ones((gt_pc.shape[0], gt_pc.shape[1], 1))], axis=-1) @ t_wc.permute(0, 2, 1)[..., :3]
+            gt_pc_t = torch.flatten(gt_pc_t, end_dim=-2)
+            gt_pcs_t.append(gt_pc_t.numpy())
 
-        # transform pred to world frame
-        t_wc = t_wc.unsqueeze(1).expand(-1, 10, -1, -1).reshape(-1, 4, 4)
-        pred_pc = pred_pc.reshape(-1, 1200, 3)
-        pred_pc_t = torch.cat([pred_pc.cpu(), torch.ones((pred_pc.shape[0], pred_pc.shape[1], 1))], axis=-1) @ t_wc.permute(0, 2, 1)[..., :3]
-        pred_pc_t = torch.flatten(pred_pc_t, end_dim=-2)        
-        pred_pcs_t.append(pred_pc_t.numpy())
-    
-    pred_pcs_t = np.concatenate(pred_pcs_t)
-    gt_pcs_t = np.concatenate(gt_pcs_t)
-    pred_seg = np.ones((pred_pcs_t.shape[0],), dtype=np.int64)
-    gt_seg = np.zeros((gt_pcs_t.shape[0],), dtype=np.int64)
-    
-    fig = vpl.segmentation_fig(
-        np.concatenate((pred_pcs_t, gt_pcs_t)), np.concatenate((pred_seg, gt_seg))
-    )
-    fig.show()
+            # transform pred to world frame
+            t_wc = t_wc.unsqueeze(1).expand(-1, 10, -1, -1).reshape(-1, 4, 4)
+            pred_pc = pred_pc.reshape(-1, 1200, 3)
+            pred_pc_t = torch.cat([pred_pc.cpu(), torch.ones((pred_pc.shape[0], pred_pc.shape[1], 1))], axis=-1) @ t_wc.permute(0, 2, 1)[..., :3]
+            pred_pc_t = torch.flatten(pred_pc_t, end_dim=-2)        
+            pred_pcs_t.append(pred_pc_t.numpy())
+        
+        pred_pcs_t = np.concatenate(pred_pcs_t)
+        gt_pcs_t = np.concatenate(gt_pcs_t)
+        pred_seg = np.ones((pred_pcs_t.shape[0],), dtype=np.int64)
+        gt_seg = np.zeros((gt_pcs_t.shape[0],), dtype=np.int64)
+        
+        fig = vpl.segmentation_fig(
+            np.concatenate((pred_pcs_t, gt_pcs_t)), np.concatenate((pred_seg, gt_seg))
+        )
+        fig.show()
 
     # plot single diffusion chain
     from non_rigid.utils.vis_utils import FlowNetAnimation
-    animation = FlowNetAnimation()
-    pos, _, _, t_wc, _  = val_dataset[1]
-    pos = pos.unsqueeze(0).cuda().transpose(-1, -2)
-    z = torch.randn(1, 1200, 3).cuda().transpose(-1, -2)
-    model_kwargs = dict(pos=pos)
-    # denoise
-    pred_flow, results = diffusion.p_sample_loop(
-        network, z.shape, z, clip_denoised=False,
-        model_kwargs=model_kwargs, progress=True, device=device
-    )
-    pred_flow = pred_flow.squeeze(0).permute(1, 0)
-    pcd = pos.squeeze().permute(1, 0).cpu().numpy()
-    for noise_step in tqdm(results[0:]):
-        pred_flow_step = noise_step.squeeze(0).permute(1, 0)
-        animation.add_trace(
-            torch.as_tensor(pcd),
-            torch.as_tensor([pcd]),
-            torch.as_tensor([pred_flow_step.cpu().numpy()]),
-            "red",
+    if visualize_single_prediction:
+        animation = FlowNetAnimation()
+        # pos, _, _, t_wc, _  = val_dataset[1]
+        pos = torch.tensor(val_dataset[visualize_single_prediction_idx]['pc_init'])
+        t_wc = torch.tensor(val_dataset[visualize_single_prediction_idx]['t_wc'])
+
+        pos = pos.unsqueeze(0).cuda().transpose(-1, -2)
+        z = torch.randn(1, 1200, 3).cuda().transpose(-1, -2)
+        model_kwargs = dict(pos=pos)
+        # denoise
+        pred_flow, results = diffusion.p_sample_loop(
+            network, z.shape, z, clip_denoised=False,
+            model_kwargs=model_kwargs, progress=True, device=device
         )
-    fig = animation.animate()
-    fig.show()
+        pred_flow = pred_flow.squeeze(0).permute(1, 0)
+        pcd = pos.squeeze().permute(1, 0).cpu().numpy()
+        for noise_step in tqdm(results[0:]):
+            pred_flow_step = noise_step.squeeze(0).permute(1, 0)
+            animation.add_trace(
+                torch.as_tensor(pcd),
+                torch.as_tensor([pcd]),
+                torch.as_tensor([pred_flow_step.cpu().numpy()]),
+                "red",
+            )
+        fig = animation.animate()
+        fig.show()
 
     quit()
 
