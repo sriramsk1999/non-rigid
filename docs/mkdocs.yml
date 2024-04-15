@@ -1,4 +1,4 @@
-site_name: python_ml_project_template
+site_name: non_rigid
 theme:
   name: material
 plugins:

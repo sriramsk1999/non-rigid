@@ -12,7 +12,8 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
-from non_rigid.models.df_base import DiffusionFlowBase, DiffusionFlowTrainingModule
+from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
+from non_rigid.models.df_base import DiffusionFlowBase, ArticulatedFlowTrainingModule, ClothFlowTrainingModule
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
@@ -56,12 +57,31 @@ def main(cfg):
 
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
     # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
-    datamodule = MicrowaveFlowDataModule(
+
+    if cfg.dataset.type == "articulated":
+        dm = MicrowaveFlowDataModule
+    elif cfg.dataset.type == "cloth":
+        dm = ProcClothFlowDataModule
+    
+    datamodule = dm(
         root=data_root,
         batch_size=cfg.training.batch_size,
         val_batch_size=cfg.training.val_batch_size,
         num_workers=cfg.resources.num_workers,
     )
+
+    # datamodule = MicrowaveFlowDataModule(
+    #     root=data_root,
+    #     batch_size=cfg.training.batch_size,
+    #     val_batch_size=cfg.training.val_batch_size,
+    #     num_workers=cfg.resources.num_workers,
+    # )
+    # datamodule = ProcClothFlowDataModule(
+    #     root = data_root,
+    #     batch_size = cfg.training.batch_size,
+    #     val_batch_size = cfg.training.val_batch_size,
+    #     num_workers = cfg.resources.num_workers,
+    # )
 
     ######################################################################
     # Create the network(s) which will be trained by the Training Module.
@@ -96,9 +116,13 @@ def main(cfg):
 
     datamodule.setup(stage="train")
     cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
-    model = DiffusionFlowTrainingModule(network, 
-        training_cfg=cfg.training, model_cfg=cfg.model)
-    # compiling model - need to fix this
+    if cfg.dataset.type == "articulated":
+        model = ArticulatedFlowTrainingModule(network, 
+                            training_cfg=cfg.training, model_cfg=cfg.model)
+    elif cfg.dataset.type == "cloth":
+        model = ClothFlowTrainingModule(network,
+                            training_cfg=cfg.training, model_cfg=cfg.model)
+    # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)
     
     ######################################################################

@@ -1,0 +1,3 @@
+name: proc_cloth_overfit
+data_dir: ~/datasets/nrp/ProcCloth/single_cloth/demos
+type: cloth
