@@ -37,7 +37,14 @@ class MicrowaveFlowDataset(data.Dataset):
         seg = torch.as_tensor(demo["seg"]).int()
         t_wc = torch.as_tensor(demo["t_wc"]).float()
         goal = torch.as_tensor(demo["goal"]).float()
-        return pc_init, flow, seg, t_wc, goal
+        # return pc_init, flow, seg, t_wc, goal
+        return {
+            "pc_init": pc_init,
+            "flow": flow,
+            "seg": seg,
+            "t_wc": t_wc,
+            "goal": goal
+        }
 
 
 

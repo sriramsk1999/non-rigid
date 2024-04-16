@@ -34,7 +34,13 @@ class ProcClothFlowDataset(data.Dataset):
         pc_init = torch.as_tensor(demo["pc_init"]).float()
         flow = torch.as_tensor(demo["flow"]).float()
         seg = torch.as_tensor(demo["seg"]).int()
-        return pc_init, flow, seg
+        # return pc_init, flow, seg
+        return {
+            "pc_init": pc_init,
+            "flow": flow,
+            "seg": seg,
+        
+        }
     
 class ProcClothFlowDataModule(L.LightningDataModule):
     def __init__(self, root, batch_size, val_batch_size, num_workers):
