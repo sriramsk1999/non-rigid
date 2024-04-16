@@ -290,10 +290,6 @@ def main(cfg):
             )
         fig = animation.animate()
         fig.show()
-        fig.write_html(
-            f"/home/triind/workspace/rpad/non-rigid/logs/general_multi_revolute_prismatic_images/diffusion_chain_{visualize_single_prediction_idx}.html",
-            include_plotlyjs="cdn",
-        )
 
     quit()
 

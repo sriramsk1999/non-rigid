@@ -200,7 +200,7 @@ def main(cfg):
             #     save_weights_only=True,
             # ),
         ],
-        num_sanity_val_steps=0,
+        # num_sanity_val_steps=0,
     )
 
     ######################################################################
