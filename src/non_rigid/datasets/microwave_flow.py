@@ -81,9 +81,8 @@ class MultiGeneralFlowDataset(data.Dataset):
 
 
 DATASET_FN = {
-    "microwave_flow": MicrowaveFlowDataset,
-    "microwave_multi_flow": MultiGeneralFlowDataset,
-    "general_multi_flow": MultiGeneralFlowDataset,
+    "articulated": MicrowaveFlowDataset,
+    "articulated_multi": MultiGeneralFlowDataset,
 }
 
 class MicrowaveFlowDataModule(L.LightningDataModule):

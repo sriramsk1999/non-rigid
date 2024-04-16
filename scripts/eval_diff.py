@@ -9,7 +9,7 @@ from pathlib import Path
 import os
 
 from non_rigid.datasets.microwave_flow import MicrowaveFlowDataset, MicrowaveFlowDataModule, DATASET_FN
-from non_rigid.models.df_base import DiffusionFlowBase, DiffusionFlowTrainingModule
+from non_rigid.models.df_base import DiffusionFlowBase
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,

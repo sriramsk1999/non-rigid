@@ -58,7 +58,7 @@ def main(cfg):
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
     # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
 
-    if cfg.dataset.type == "articulated":
+    if cfg.dataset.type in ["articulated", "articulated_multi"]:
         dm = MicrowaveFlowDataModule
     elif cfg.dataset.type == "cloth":
         dm = ProcClothFlowDataModule
@@ -117,7 +117,7 @@ def main(cfg):
 
     datamodule.setup(stage="train")
     cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
-    if cfg.dataset.type == "articulated":
+    if cfg.dataset.type in ["articulated", "articulated_multi"]:
         model = ArticulatedFlowTrainingModule(network, 
                             training_cfg=cfg.training, model_cfg=cfg.model)
     elif cfg.dataset.type == "cloth":
