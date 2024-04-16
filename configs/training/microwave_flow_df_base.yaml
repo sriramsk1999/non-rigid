@@ -6,6 +6,7 @@ batch_size: 16
 val_batch_size: 4
 grad_clip_norm: 1.0
 num_training_steps: None # Set by the training loop.
+training_sample_size: None # Set by the training loop, from dataset config.
 
 check_val_every_n_epochs: 200
 num_wta_trials: 50
