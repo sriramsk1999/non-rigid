@@ -1,0 +1,3 @@
+name: multi_revolute_prismatic_flow
+data_dir: "~/datasets/nrp/dataset/demos/revolute-3_prismatic-3_flow"
+type: general_multi_flow

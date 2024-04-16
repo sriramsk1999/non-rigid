@@ -45,7 +45,7 @@ class MicrowaveFlowDataset(data.Dataset):
         }
 
 
-class MultiMicrowaveFlowDataset(data.Dataset):
+class MultiGeneralFlowDataset(data.Dataset):
     def __init__(self, root: Path, type: str="train"):
         # This is a toy dataset - no need to normalize or otherwise process point cloud with torch geometric
         super().__init__()
@@ -82,7 +82,8 @@ class MultiMicrowaveFlowDataset(data.Dataset):
 
 DATASET_FN = {
     "microwave_flow": MicrowaveFlowDataset,
-    "microwave_multi_flow": MultiMicrowaveFlowDataset,
+    "microwave_multi_flow": MultiGeneralFlowDataset,
+    "general_multi_flow": MultiGeneralFlowDataset,
 }
 
 class MicrowaveFlowDataModule(L.LightningDataModule):

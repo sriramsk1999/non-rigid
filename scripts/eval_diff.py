@@ -172,11 +172,11 @@ def main(cfg):
     num_wta_trials = 50
     diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
 
-    get_train_dataset_metrics = False
+    get_train_dataset_metrics = True
     get_val_dataset_metrics = True
-    visualize_all_predictions = True
+    visualize_all_predictions = False
     visualize_single_prediction = True
-    visualize_single_prediction_idx = 12
+    visualize_single_prediction_idx = 10
 
     import plotly.express as px
 
@@ -290,6 +290,10 @@ def main(cfg):
             )
         fig = animation.animate()
         fig.show()
+        fig.write_html(
+            f"/home/triind/workspace/rpad/non-rigid/logs/general_multi_revolute_prismatic_images/diffusion_chain_{visualize_single_prediction_idx}.html",
+            include_plotlyjs="cdn",
+        )
 
     quit()
 
