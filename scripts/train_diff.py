@@ -58,7 +58,7 @@ def main(cfg):
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
     # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
 
-    if cfg.dataset.type == "articulated":
+    if cfg.dataset.type in ["articulated", "articulated_multi"]:
         dm = MicrowaveFlowDataModule
     elif cfg.dataset.type == "cloth":
         dm = ProcClothFlowDataModule
@@ -68,6 +68,7 @@ def main(cfg):
         batch_size=cfg.training.batch_size,
         val_batch_size=cfg.training.val_batch_size,
         num_workers=cfg.resources.num_workers,
+        type=cfg.dataset.type,
     )
 
     ######################################################################
@@ -183,6 +184,7 @@ def main(cfg):
             #     save_weights_only=True,
             # ),
         ],
+        # num_sanity_val_steps=0,
     )
 
     ######################################################################
