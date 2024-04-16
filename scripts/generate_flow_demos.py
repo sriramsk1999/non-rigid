@@ -16,10 +16,12 @@ if __name__ == "__main__":
     OBJ_ID = "7273"
     NUM_DEMOS = 8
     NUM_VAL_DEMOS = 2
-    PM_DIR = Path(os.path.expanduser("~/datasets/partnet-mobility/dataset"))
+    # PM_DIR = Path(os.path.expanduser("~/datasets/partnet-mobility/dataset"))
+    PM_DIR = Path(os.path.expanduser("~/workspace/rpad/data/partnet-mobility/dataset"))
     # NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow"))
     # NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow_multi"))
-    NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow_uniform"))
+    # NR_DIR = Path(os.path.expanduser(f"~/datasets/nrp/dataset/demos/{OBJ_ID}_flow_uniform"))
+    NR_DIR = Path(os.path.expanduser(f"~/workspace/rpad/data/non_rigid/dataset/demos/{OBJ_ID}_flow_uniform"))
     GUI = True
     USE_EGL = not GUI
     GENERATE_TRAIN = False
