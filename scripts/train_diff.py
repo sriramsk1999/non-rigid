@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
-from non_rigid.models.df_base import DiffusionFlowBase, ArticulatedFlowTrainingModule, ClothFlowTrainingModule
+from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionTrainingModule
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
@@ -70,19 +70,6 @@ def main(cfg):
         num_workers=cfg.resources.num_workers,
     )
 
-    # datamodule = MicrowaveFlowDataModule(
-    #     root=data_root,
-    #     batch_size=cfg.training.batch_size,
-    #     val_batch_size=cfg.training.val_batch_size,
-    #     num_workers=cfg.resources.num_workers,
-    # )
-    # datamodule = ProcClothFlowDataModule(
-    #     root = data_root,
-    #     batch_size = cfg.training.batch_size,
-    #     val_batch_size = cfg.training.val_batch_size,
-    #     num_workers = cfg.resources.num_workers,
-    # )
-
     ######################################################################
     # Create the network(s) which will be trained by the Training Module.
     # The network should (ideally) be lightning-independent. This allows
@@ -116,12 +103,9 @@ def main(cfg):
 
     datamodule.setup(stage="train")
     cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
-    if cfg.dataset.type == "articulated":
-        model = ArticulatedFlowTrainingModule(network, 
-                            training_cfg=cfg.training, model_cfg=cfg.model)
-    elif cfg.dataset.type == "cloth":
-        model = ClothFlowTrainingModule(network,
-                            training_cfg=cfg.training, model_cfg=cfg.model)
+    # updating the training sample size
+    cfg.training.training_sample_size = cfg.dataset.sample_size
+    model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)
     
