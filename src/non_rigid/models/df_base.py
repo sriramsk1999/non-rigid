@@ -182,7 +182,15 @@ class FlowPredictionInferenceModule(L.LightningModule):
         super().__init__()
         self.network = network
         self.batch_size = inference_cfg.batch_size
-        # TODO: try inferring sample size from input batch?
+        self.val_batch_size = inference_cfg.val_batch_size
+        self.num_wta_trials = inference_cfg.num_wta_trials
+        self.sample_size = inference_cfg.sample_size
+
+        self.diff_steps = model_cfg.diff_train_steps
+        self.diffusion = create_diffusion(
+            timestep_respacing=None,
+            diffusion_steps=self.diff_steps,
+        )
 
     def forward(self, data):
         raise NotImplementedError("Inference module should not use forward method - use 'predict' instead.")
@@ -212,15 +220,43 @@ class FlowPredictionInferenceModule(L.LightningModule):
             pred_flow = pred_flow.reshape(bs, num_samples, self.sample_size, -1)
         return pos, pred_flow
 
+    def predict_wta(self, batch, mode):
+        pos = batch["pc_init"]
+        gt_flow = batch["flow"]
+        seg = batch["seg"]
+        # reshaping and expanding for winner-take-all
+        bs = pos.shape[0]
+        gt_flow = gt_flow.unsqueeze(1).expand(-1, self.num_wta_trials, -1, -1).reshape(bs * self.num_wta_trials, self.sample_size, -1)
+        seg = seg.unsqueeze(1).expand(-1, self.num_wta_trials, -1).reshape(bs * self.num_wta_trials, -1)
+        # generating diffusion predictions
+        pos, pred_flow = self.predict(pos, self.num_wta_trials, unflatten=False)
+        # computing wta errors
+        cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=True, seg=seg).reshape(bs, self.num_wta_trials)
+        rmse = flow_rmse(pred_flow, gt_flow, mask=False, seg=None).reshape(bs, self.num_wta_trials)
+        pred_flow = pred_flow.reshape(bs, self.num_wta_trials, -1, 3)
+        winner = torch.argmin(rmse, dim=-1)
+        # logging
+        cos_sim_wta = cos_sim[torch.arange(bs), winner]
+        rmse_wta = rmse[torch.arange(bs), winner]
+        pred_flows_wta = pred_flow[torch.arange(bs), winner]
+        # self.log_dict(
+        #     {
+        #         f"{mode}_wta/cos_sim": cos_sim_wta.mean(),
+        #         f"{mode}_wta/rmse": rmse_wta.mean(),
+        #     },
+        #     add_dataloader_idx=False,
+        #     prog_bar = True,
+        # )
+        return pred_flows_wta, cos_sim_wta, rmse_wta
+
+    # don't need to use this yet
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        return super().predict_step(batch, batch_idx, dataloader_idx)
-    
-
-    # predict - generic function as implemented in training module
-    # predict_step - inherit from lightning training, handles logging
-    # predict_wta - 
-
+        pred_flows_wtas, cos_sim_wtas, rmse_wtas = self.predict_wta(batch, mode="predict")
+        return {
+            "cos_sim": cos_sim_wtas,
+            "rmse": rmse_wtas,
+        }
 
 
 
