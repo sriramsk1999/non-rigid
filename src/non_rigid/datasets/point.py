@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 import numpy as np
 import os
 from pathlib import Path
@@ -62,6 +63,7 @@ class PointDataset(data.Dataset):
         else:
             raise ValueError(f"Unknown dataset type: {self.type}")
 
+    @lru_cache(maxsize=1000)
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         demo = np.load(self.demo_files[index % self.num_demos])
 

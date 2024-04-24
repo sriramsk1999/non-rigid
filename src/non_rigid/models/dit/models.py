@@ -9,11 +9,14 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+import omegaconf
 import torch
 import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+
+from non_rigid.nets.dgcnn import DGCNN
 
 
 def modulate(x, shift, scale):
@@ -401,6 +404,7 @@ class DiT_PointCloud_Unc(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         learn_sigma=True,
+        model_cfg=None,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -486,6 +490,7 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         learn_sigma=True,
+        model_cfg=None,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -493,16 +498,43 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
         # self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.out_channels = 6 if learn_sigma else 3
         self.num_heads = num_heads
+        self.model_cfg = model_cfg
+
         # x_embedder is conv1d layer instead of 2d patch embedder
-        self.x_embedder = nn.Conv1d(
-            in_channels, hidden_size // 2, kernel_size=1, stride=1, padding=0, bias=True
-        )
-        self.action_embedder = nn.Conv1d(
-            in_channels, hidden_size // 2, kernel_size=1, stride=1, padding=0, bias=True
-        )
-        self.anchor_embedder = nn.Conv1d(
-            in_channels, hidden_size, kernel_size=1, stride=1, padding=0, bias=True
-        )
+        if self.model_cfg.x_encoder == "mlp":
+            self.x_embedder = nn.Conv1d(
+                in_channels,
+                hidden_size // 2,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        else:
+            raise ValueError(f"Invalid x_encoder: {self.model_cfg.x_encoder}")
+
+        if self.model_cfg.pcd_encoder == "mlp":
+            self.action_embedder = nn.Conv1d(
+                in_channels,
+                hidden_size // 2,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+            self.anchor_embedder = nn.Conv1d(
+                in_channels, hidden_size, kernel_size=1, stride=1, padding=0, bias=True
+            )
+        elif self.model_cfg.pcd_encoder == "dgcnn":
+            self.action_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=hidden_size // 2
+            )
+            self.anchor_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=hidden_size
+            )
+        else:
+            raise ValueError(f"Invalid pcd_encoder: {self.model_cfg.pcd_encoder}")
+
         # no pos_embed, or y_embedder
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.blocks = nn.ModuleList(
@@ -568,8 +600,6 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
         # print(f'DiT_PointCloud_Unc_Cross.forward(): x_emb.shape={x_emb.shape}')
 
         pc_action_centered = pc_action - pc_action.mean(dim=-1, keepdim=True)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): pc_action_centered.shape={pc_action_centered.shape}')
-
         action_emb = self.action_embedder(pc_action_centered)
         # print(f'DiT_PointCloud_Unc_Cross.forward(): action_emb.shape={action_emb.shape}')
 

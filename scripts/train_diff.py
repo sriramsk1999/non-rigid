@@ -96,6 +96,7 @@ def main(cfg):
         in_channels=cfg.model.in_channels,
         learn_sigma=cfg.model.learn_sigma,
         model=cfg.model.dit_arch,
+        model_cfg=cfg.model,
     )
 
     ######################################################################

@@ -49,11 +49,11 @@ DiT_models = {
 
 class DiffusionFlowBase(nn.Module):
     # literally just unconditional DiT adapted for PC
-    def __init__(self, in_channels=6, learn_sigma=False, model="DiT_pcu_S"):
+    def __init__(self, in_channels=6, learn_sigma=False, model="DiT_pcu_S", model_cfg=None):
         super().__init__()
         # TODO: get in channels from params, and pass as kwargs
         # TODO: input needs to already be hidden size dim
-        self.dit = DiT_models[model](in_channels=in_channels, learn_sigma=learn_sigma)
+        self.dit = DiT_models[model](in_channels=in_channels, learn_sigma=learn_sigma, model_cfg=model_cfg)
 
     def forward(self, x, t, **kwargs):
         # extract
