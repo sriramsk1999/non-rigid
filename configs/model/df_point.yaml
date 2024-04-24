@@ -1,0 +1,8 @@
+name: df_point
+in_channels: 3
+learn_sigma: True
+dit_arch: DiT_pcu_cross_xS
+diff_train_steps: 100
+diff_inference_steps: 100
+diff_noise_schedule: squaredcos_cap_v2
+diff_noise_scale: 0.25

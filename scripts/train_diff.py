@@ -1,5 +1,5 @@
 import json
-
+from functools import partial
 from pathlib import Path
 import os
 
@@ -12,8 +12,9 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
+from non_rigid.datasets.point import PointDataModule
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
-from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionTrainingModule
+from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionTrainingModule, PointPredictionTrainingModule
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
@@ -62,6 +63,8 @@ def main(cfg):
         dm = MicrowaveFlowDataModule
     elif cfg.dataset.type == "cloth":
         dm = ProcClothFlowDataModule
+    elif cfg.dataset.type == "point":
+        dm = partial(PointDataModule, dataset_cfg=cfg.dataset) # TODO: Remove the need to use partial
     
     datamodule = dm(
         root=data_root,
@@ -106,7 +109,12 @@ def main(cfg):
     cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
     # updating the training sample size
     cfg.training.training_sample_size = cfg.dataset.sample_size
-    model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
+    
+    if cfg.dataset.type in ["articulated", "articulated_multi", "cloth"]:
+        model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
+    elif cfg.dataset.type == "point":
+        model = PointPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
+    
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)
     
