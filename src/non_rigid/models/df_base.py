@@ -64,6 +64,9 @@ class FlowPredictionTrainingModule(L.LightningModule):
     def __init__(self, network, training_cfg, model_cfg) -> None:
         super().__init__()
         self.network = network
+        self.training_cfg = training_cfg
+        self.model_cfg = model_cfg
+        
         self.lr = training_cfg.lr
         self.weight_decay = training_cfg.weight_decay  # 1e-5
         # self.mode, self.traj_len so far not needed
@@ -82,15 +85,26 @@ class FlowPredictionTrainingModule(L.LightningModule):
             diffusion_steps=self.diff_train_steps,
         )
 
-    def forward(self, x, t, mode="train"):
-        # get flow and pos
-        pos = x["pc_init"]
-        flow = x["flow"]
+    def forward(self, batch, t, mode="train"):
+        if self.model_cfg.type == "flow":
+            # get flow and pos
+            pos = batch["pc_init"].permute(0, 2, 1)  # channel first
+            flow = batch["flow"].permute(0, 2, 1)  # channel first
 
-        # channel first
-        pos = torch.transpose(pos, -1, -2)
-        flow = torch.transpose(flow, -1, -2)
-        model_kwargs = dict(pos=pos)
+            # Setup additional data required by the model
+            model_kwargs = dict(pos=pos)
+
+        # If we are doing cross attention, we need to pass in additional data
+        elif self.model_cfg.type == "flow_cross":
+            pos = batch["pc_init"].permute(0, 2, 1)  # channel first
+            pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # channel first
+            flow = batch["flow"].permute(0, 2, 1)  # channel first
+            
+            model_kwargs = dict(
+                y=pc_anchor,  # Pass original anchor point cloud
+                x0=pos,  # Pass starting action point cloud
+            )
+        
         # run diffusion
         loss_dict = self.diffusion.training_losses(self.network, flow, t, model_kwargs)
         loss = loss_dict["loss"].mean()
@@ -105,20 +119,11 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
     # 'predict' should only be called for inference/evaluation
     @torch.no_grad()
-    def predict(self, pos, num_samples, unflatten=False):
+    def predict(self, bs, model_kwargs, num_samples, unflatten=False):
         """
         unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return
             with shape (batch_size * num_samples, ...)
         """
-        bs = pos.shape[0]
-        # reshaping and expanding
-        pos = (
-            pos.transpose(-1, -2)
-            .unsqueeze(1)
-            .expand(-1, num_samples, -1, -1)
-            .reshape(bs * num_samples, -1, self.sample_size)
-        )
-        model_kwargs = dict(pos=pos)
         # generating latents and running diffusion
         z = torch.randn(bs * num_samples, 3, self.sample_size, device=self.device)
         pred_flow, results = self.diffusion.p_sample_loop(
@@ -131,32 +136,79 @@ class FlowPredictionTrainingModule(L.LightningModule):
             device=self.device,
         )
         pred_flow = pred_flow.permute(0, 2, 1)
-        pos = pos.permute(0, 2, 1)
         if unflatten:
-            pos = pos.reshape(bs, num_samples, self.sample_size, -1)
             pred_flow = pred_flow.reshape(bs, num_samples, self.sample_size, -1)
-        return pos, pred_flow
+        
+        for key in model_kwargs:
+            if key in ["pos", "y", "x0"]:
+                model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
+                if unflatten:
+                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
+        return model_kwargs, pred_flow
 
     def predict_wta(self, batch, mode):
-        pos = batch["pc_init"]
-        gt_flow = batch["flow"]
-        seg = batch["seg"]
-        # reshaping and expanding for winner-take-all
-        bs = pos.shape[0]
-        gt_flow = (
-            gt_flow.unsqueeze(1)
-            .expand(-1, self.num_wta_trials, -1, -1)
-            .reshape(bs * self.num_wta_trials, self.sample_size, -1)
-        )
-        seg = (
-            seg.unsqueeze(1)
-            .expand(-1, self.num_wta_trials, -1)
-            .reshape(bs * self.num_wta_trials, -1)
-        )
+        if self.model_cfg.type == "flow":
+            pos = batch["pc_init"]
+            gt_flow = batch["flow"]
+            seg = batch["seg"]
+            mask = True
+            
+            # reshaping and expanding for winner-take-all
+            bs = pos.shape[0]
+            gt_flow = (
+                gt_flow.unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1, -1)
+                .reshape(bs * self.num_wta_trials, self.sample_size, -1)
+            )
+            seg = (
+                seg.unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1)
+                .reshape(bs * self.num_wta_trials, -1)
+            )
+            pos = (
+                pos.transpose(-1, -2)
+                .unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1, -1)
+                .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+            )
+            
+            model_kwargs = dict(pos=pos)
+        elif self.model_cfg.type == "flow_cross":
+            pos = batch["pc_init"]
+            pc_anchor = batch["pc_anchor"]
+            gt_flow = batch["flow"]
+            seg = None # TODO Rigid dataset doesnt have this
+            mask = False
+            
+            # reshaping and expanding for winner-take-all
+            bs = pos.shape[0]
+            gt_flow = (
+                gt_flow.unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1, -1)
+                .reshape(bs * self.num_wta_trials, self.sample_size, -1)
+            )
+            pos = (
+                pos.transpose(-1, -2)
+                .unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1, -1)
+                .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+            )
+            pc_anchor = (
+                pc_anchor.transpose(-1, -2)
+                .unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1, -1)
+                .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+            )
+            
+            model_kwargs = dict(
+                y=pc_anchor,  # Pass original anchor point cloud
+                x0=pos,  # Pass starting action point cloud
+            )
+        
         # generating diffusion predictions
-        pos, pred_flow = self.predict(pos, self.num_wta_trials, unflatten=False)
+        model_kwargs, pred_flow = self.predict(bs, model_kwargs, self.num_wta_trials, unflatten=False)
         # computing wta errors
-        cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=True, seg=seg).reshape(
+        cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
             bs, self.num_wta_trials
         )
         rmse = flow_rmse(pred_flow, gt_flow, mask=False, seg=None).reshape(
@@ -203,12 +255,67 @@ class FlowPredictionTrainingModule(L.LightningModule):
         # if batch_idx == 0:
         #     self.mode_distribution_cache = {"x": None, "y": None}
         with torch.no_grad():
-            pred_flows_wtas, cos_sim_wtas, rmse_wtas = self.predict_wta(
+            pred_flows_wta, cos_sim_wta, rmse_wta = self.predict_wta(
                 batch, mode="val"
             )
+            
+        if self.model_cfg.type == "flow_cross":
+            # Visualize predicted vs ground truth
+            viz_idx = np.random.randint(0, batch["pc_init"].shape[0])
+            
+            pc_pos_viz = batch["pc_init"][viz_idx, :, :3]
+            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+            pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
+            
+            pred_flows_viz = pred_flows_wta[viz_idx, :, :3]
+            pred_action_wta_viz = pc_pos_viz + pred_flows_viz
+            
+            pc_comb_viz = torch.cat([pc_action_viz, pc_anchor_viz], dim=0)
+            pc_comb_viz_min = pc_comb_viz.min(dim=0).values
+            pc_comb_viz_max = pc_comb_viz.max(dim=0).values
+            pc_comb_viz_extent = pc_comb_viz_max - pc_comb_viz_min
+            pred_action_wta_viz = pred_action_wta_viz[
+                (
+                    pred_action_wta_viz[:, 0]
+                    > pc_comb_viz_min[0] - 0.5 * pc_comb_viz_extent[0]
+                )
+                & (
+                    pred_action_wta_viz[:, 0]
+                    < pc_comb_viz_max[0] + 0.5 * pc_comb_viz_extent[0]
+                )
+                & (
+                    pred_action_wta_viz[:, 1]
+                    > pc_comb_viz_min[1] - 0.5 * pc_comb_viz_extent[1]
+                )
+                & (
+                    pred_action_wta_viz[:, 1]
+                    < pc_comb_viz_max[1] + 0.5 * pc_comb_viz_extent[1]
+                )
+                & (
+                    pred_action_wta_viz[:, 2]
+                    > pc_comb_viz_min[2] - 0.5 * pc_comb_viz_extent[2]
+                )
+                & (
+                    pred_action_wta_viz[:, 2]
+                    < pc_comb_viz_max[2] + 0.5 * pc_comb_viz_extent[2]
+                )
+            ]
+            predicted_vs_gt_wta_tensors = [
+                pc_pos_viz,
+                pc_action_viz,
+                pc_anchor_viz,
+                pred_action_wta_viz,
+            ]
+            predicted_vs_gt_wta_colors = ["yellow", "green", "red", "blue"]
+            predicted_vs_gt_wta = get_color(
+                tensor_list=predicted_vs_gt_wta_tensors,
+                color_list=predicted_vs_gt_wta_colors,
+            )
+            wandb.log({"val_wta/predicted_vs_gt": wandb.Object3D(predicted_vs_gt_wta)})
+            
         return {
-            "loss": rmse_wtas,
-            "cos_sim": cos_sim_wtas,
+            "loss": rmse_wta,
+            "cos_sim": cos_sim_wta,
         }
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
@@ -332,6 +439,9 @@ class PointPredictionTrainingModule(L.LightningModule):
     ) -> None:
         super().__init__()
         self.network = network
+        self.training_cfg = training_cfg
+        self.model_cfg = model_cfg
+        
         self.lr = training_cfg.lr
         self.weight_decay = training_cfg.weight_decay  # 1e-5
         # self.mode, self.traj_len so far not needed
@@ -355,21 +465,23 @@ class PointPredictionTrainingModule(L.LightningModule):
             diffusion_steps=self.diff_train_steps,
         )
 
-    def forward(self, x, t, mode="train"):
+    def forward(self, batch, t, mode="train"):
         # Extract point clouds from batch
-        pc_action = x["pc_action"].permute(0, 2, 1)  # B, C, N
-        pc_anchor = x["pc_anchor"].permute(0, 2, 1)  # B, C, N
+        
+        pos = batch["pc_init"].permute(0, 2, 1)  # B, C, N
+        pc_action = batch["pc_action"].permute(0, 2, 1)  # B, C, N
+        pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # B, C, N
 
         # Setup additional data required by the model
         model_kwargs = dict(
-            pc_action=pc_action,  # Pass original action point cloud
-            pc_anchor=pc_anchor,  # Pass original anchor point cloud
+            y=pc_anchor,  # Pass original anchor point cloud
+            x0=pc_action
         )
 
         # Run diffusion
-        noise = torch.randn_like(pc_action) * self.noise_scale
+        noise = torch.randn_like(pos) * self.noise_scale
         loss_dict = self.diffusion.training_losses(
-            self.network, pc_action, t, model_kwargs, noise
+            self.network, pos, t, model_kwargs, noise
         )
         loss = loss_dict["loss"].mean()
 
@@ -386,8 +498,8 @@ class PointPredictionTrainingModule(L.LightningModule):
     @torch.no_grad()
     def predict(
         self,
-        pc_action: torch.Tensor,
-        pc_anchor: torch.Tensor,
+        bs: int,
+        model_kwargs: Dict[str, torch.Tensor],
         num_samples: int,
         unflatten: bool = False,
     ):
@@ -395,21 +507,6 @@ class PointPredictionTrainingModule(L.LightningModule):
         unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return
             with shape (batch_size * num_samples, ...)
         """
-        bs = pc_action.shape[0]
-        # reshaping and expanding
-        pc_action = (
-            pc_action.transpose(-1, -2)
-            .unsqueeze(1)
-            .expand(-1, num_samples, -1, -1)
-            .reshape(bs * num_samples, -1, self.sample_size)
-        )
-        pc_anchor = (
-            pc_anchor.transpose(-1, -2)
-            .unsqueeze(1)
-            .expand(-1, num_samples, -1, -1)
-            .reshape(bs * num_samples, -1, self.sample_size)
-        )
-        model_kwargs = dict(pc_action=pc_action, pc_anchor=pc_anchor)
         # generating latents and running diffusion
         z = (
             torch.randn(bs * num_samples, 3, self.sample_size, device=self.device)
@@ -425,29 +522,52 @@ class PointPredictionTrainingModule(L.LightningModule):
             device=self.device,
         )
         pred_action = pred_action.permute(0, 2, 1)
-        pc_action = pc_action.permute(0, 2, 1)
         if unflatten:
-            pc_action = pc_action.reshape(bs, num_samples, self.sample_size, -1)
             pred_action = pred_action.reshape(bs, num_samples, self.sample_size, -1)
-        return pc_action, pc_anchor, pred_action
+            
+        for key in model_kwargs:
+            if key in ["x0", "y"]:
+                model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
+                if unflatten:
+                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
+
+        return model_kwargs, pred_action, results
 
     def predict_wta(self, batch: Dict[str, torch.Tensor], mode: str):
-        pc_action = batch["pc_action"]
-        pc_anchor = batch["pc_anchor"]
+        pos = batch["pc_init"].to(self.device)
+        pc_action = batch["pc_action"].to(self.device)
+        pc_anchor = batch["pc_anchor"].to(self.device)
 
-        # pos = batch["pc_init"]
-        # gt_flow = batch["flow"]
-        # seg = batch["seg"]
+        print(f'self.sample_size: {self.sample_size}')
+
         # reshaping and expanding for winner-take-all
         bs = pc_action.shape[0]
         gt_action = (
-            pc_action.unsqueeze(1)
+            pos.unsqueeze(1)
             .expand(-1, self.num_wta_trials, -1, -1)
             .reshape(bs * self.num_wta_trials, self.sample_size, -1)
         )
+        pc_action = (
+            pc_action.transpose(-1, -2)
+            .unsqueeze(1)
+            .expand(-1, self.num_wta_trials, -1, -1)
+            .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+        )
+        pc_anchor = (
+            pc_anchor.transpose(-1, -2)
+            .unsqueeze(1)
+            .expand(-1, self.num_wta_trials, -1, -1)
+            .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+        )
+        
+        model_kwargs = dict(
+            y=pc_anchor, 
+            x0=pc_action,
+        )
+        
         # generating diffusion predictions
-        pc_action, pc_anchor, pred_action = self.predict(
-            pc_action, pc_anchor, self.num_wta_trials, unflatten=False
+        model_kwargs, pred_action, results = self.predict(
+            bs, model_kwargs, self.num_wta_trials, unflatten=False
         )
 
         # computing wta errors
@@ -463,14 +583,6 @@ class PointPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_actions_wta = pred_action[torch.arange(bs), winner]
-        self.log_dict(
-            {
-                f"{mode}_wta/cos_sim": cos_sim_wta.mean(),
-                f"{mode}_wta/rmse": rmse_wta.mean(),
-            },
-            add_dataloader_idx=False,
-            prog_bar=True,
-        )
         return pred_actions_wta, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
@@ -510,13 +622,17 @@ class PointPredictionTrainingModule(L.LightningModule):
         )
 
         # Visualize predicted vs ground truth
-        pc_action_viz = batch["pc_action"][0, :, :3]
-        pc_anchor_viz = batch["pc_anchor"][0, :, :3]
+        viz_idx = np.random.randint(0, batch["pc_init"].shape[0])
+
+        pc_pos_viz = batch["pc_init"][viz_idx, :, :3]
+        pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+        pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
+
         pc_comb_viz = torch.cat([pc_action_viz, pc_anchor_viz], dim=0)
         pc_comb_viz_min = pc_comb_viz.min(dim=0).values
         pc_comb_viz_max = pc_comb_viz.max(dim=0).values
         pc_comb_viz_extent = pc_comb_viz_max - pc_comb_viz_min
-        pred_action_wta_viz = pred_actions_wta[0, :, :3]
+        pred_action_wta_viz = pred_actions_wta[viz_idx, :, :3]
         pred_action_wta_viz = pred_action_wta_viz[
             (
                 pred_action_wta_viz[:, 0]
@@ -544,11 +660,12 @@ class PointPredictionTrainingModule(L.LightningModule):
             )
         ]
         predicted_vs_gt_wta_tensors = [
+            pc_pos_viz,
             pc_action_viz,
             pc_anchor_viz,
             pred_action_wta_viz,
         ]
-        predicted_vs_gt_wta_colors = ["green", "red", "blue"]
+        predicted_vs_gt_wta_colors = ["green", "yellow", "red", "blue"]
         predicted_vs_gt_wta = get_color(
             tensor_list=predicted_vs_gt_wta_tensors,
             color_list=predicted_vs_gt_wta_colors,
@@ -556,8 +673,18 @@ class PointPredictionTrainingModule(L.LightningModule):
         wandb.log({"val_wta/predicted_vs_gt": wandb.Object3D(predicted_vs_gt_wta)})
 
         return {
-            "loss": cos_sim_wta,
-            "cos_sim": rmse_wta,
+            "loss": rmse_wta,
+            "cos_sim": cos_sim_wta,
+        }
+        
+    @torch.no_grad()
+    def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
+        pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+            batch, mode="val"
+        )
+        return {
+            "cos_sim": cos_sim_wta,
+            "rmse": rmse_wta,
         }
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):

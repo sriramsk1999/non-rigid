@@ -40,14 +40,19 @@ def random_se3(
         "quat_uniform",
         "random_flat_upright",
         "random_upright",
+        "identity"
     ]
 
-    if rot_sample_method == "quat_uniform" and np.isclose(rot_var, np.pi):
-        # This true uniform SE(3) sampling tends to make it hard to train the models
-        # In contrast, the axis angle sampling tends to leave the objects close to upright
-        quat = torch.randn(N, 4, device=device)
-        quat = quat / torch.linalg.norm(quat)
-        R = quaternion_to_matrix(quat)
+    if rot_sample_method == "axis_angle":
+        # this is random axis angle sampling (rot_sample_method == "axis_angle")
+        axis_angle_random = torch.randn(N, 3, device=device)
+        rot_ratio = (
+            torch.rand(1).item()
+            * rot_var
+            / torch.norm(axis_angle_random, dim=1).max().item()
+        )
+        constrained_axix_angle = rot_ratio * axis_angle_random  # max angle is rot_var
+        R = axis_angle_to_matrix(constrained_axix_angle)
         random_translation = torch.randn(N, 3, device=device)
         translation_ratio = (
             trans_var / torch.norm(random_translation, dim=1).max().item()
@@ -70,6 +75,17 @@ def random_se3(
         R_z = axis_angle_to_matrix(axis_angle_z)
 
         R = torch.bmm(R_z, R_random)
+        random_translation = torch.randn(N, 3, device=device)
+        translation_ratio = (
+            trans_var / torch.norm(random_translation, dim=1).max().item()
+        )
+        t = torch.rand(1).item() * translation_ratio * random_translation
+    if rot_sample_method == "quat_uniform":
+        # This true uniform SE(3) sampling tends to make it hard to train the models
+        # In contrast, the axis angle sampling tends to leave the objects close to upright
+        quat = torch.randn(N, 4, device=device)
+        quat = quat / torch.linalg.norm(quat)
+        R = quaternion_to_matrix(quat)
         random_translation = torch.randn(N, 3, device=device)
         translation_ratio = (
             trans_var / torch.norm(random_translation, dim=1).max().item()
@@ -98,19 +114,9 @@ def random_se3(
             trans_var / torch.norm(random_translation, dim=1).max().item()
         )
         t = torch.rand(1).item() * translation_ratio * random_translation
+    elif rot_sample_method == "identity":
+        R = torch.eye(3, device=device).unsqueeze(0).repeat(N, 1, 1)
+        t = torch.zeros(N, 3, device=device)
     else:
-        # this is random axis angle sampling (rot_sample_method == "axis_angle")
-        axis_angle_random = torch.randn(N, 3, device=device)
-        rot_ratio = (
-            torch.rand(1).item()
-            * rot_var
-            / torch.norm(axis_angle_random, dim=1).max().item()
-        )
-        constrained_axix_angle = rot_ratio * axis_angle_random  # max angle is rot_var
-        R = axis_angle_to_matrix(constrained_axix_angle)
-        random_translation = torch.randn(N, 3, device=device)
-        translation_ratio = (
-            trans_var / torch.norm(random_translation, dim=1).max().item()
-        )
-        t = torch.rand(1).item() * translation_ratio * random_translation
+        raise ValueError(f"Unknown rot_sample_method: {rot_sample_method}")
     return Rotate(R, device=device).translate(t)

@@ -12,7 +12,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
-from non_rigid.datasets.point import PointDataModule
+from non_rigid.datasets.rigid import RigidDataModule
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
 from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionTrainingModule, PointPredictionTrainingModule
 from non_rigid.utils.script_utils import (
@@ -63,8 +63,8 @@ def main(cfg):
         dm = MicrowaveFlowDataModule
     elif cfg.dataset.type == "cloth":
         dm = ProcClothFlowDataModule
-    elif cfg.dataset.type == "point":
-        dm = partial(PointDataModule, dataset_cfg=cfg.dataset) # TODO: Remove the need to use partial
+    elif cfg.dataset.type in ["rigid_point", "rigid_flow"]:
+        dm = partial(RigidDataModule, dataset_cfg=cfg.dataset) # TODO: Pass dataset cfg to all so we can remove partial
     
     datamodule = dm(
         root=data_root,
@@ -111,9 +111,9 @@ def main(cfg):
     # updating the training sample size
     cfg.training.training_sample_size = cfg.dataset.sample_size
     
-    if cfg.dataset.type in ["articulated", "articulated_multi", "cloth"]:
+    if cfg.model.type in ["flow", "flow_cross"]:
         model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
-    elif cfg.dataset.type == "point":
+    elif cfg.model.type in ["point_cross"]:
         model = PointPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
     
     # TODO: compiling model doesn't work with lightning out of the box?

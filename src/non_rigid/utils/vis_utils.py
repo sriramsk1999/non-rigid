@@ -26,7 +26,8 @@ class FlowNetAnimation:
             self.traces[self.num_frames] = [pcd]
             for t in ts:
                 self.traces[self.num_frames].append(t)
-        except IndexError:
+        except IndexError as e:
+            print(f'Failed to add trace for frame {self.num_frames}. Error: {e}')
             return
 
         # self.traces[self.num_frames] = pcd
@@ -110,8 +111,8 @@ class FlowNetAnimation:
         self.fig.update_layout(
             title="FlowNet Flow Prediction",
             scene_camera=camera,
-            width=600,
-            height=600,
+            width=1200,
+            height=1200,
             scene1=rvpl._3d_scene(self.pos),
             updatemenus=[
                 {

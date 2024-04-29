@@ -15,6 +15,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from typing import Optional
 
 from non_rigid.nets.dgcnn import DGCNN
 
@@ -500,11 +501,17 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
         self.num_heads = num_heads
         self.model_cfg = model_cfg
 
-        # x_embedder is conv1d layer instead of 2d patch embedder
+        x_encoder_hidden_dims = hidden_size
+        if self.model_cfg.x_encoder is not None and self.model_cfg.x0_encoder is not None:
+            # We are concatenating x and x0 features so we halve the hidden size
+            x_encoder_hidden_dims = hidden_size // 2
+
+        # Encoder for current timestep x features       
         if self.model_cfg.x_encoder == "mlp":
+            # x_embedder is conv1d layer instead of 2d patch embedder
             self.x_embedder = nn.Conv1d(
                 in_channels,
-                hidden_size // 2,
+                x_encoder_hidden_dims,
                 kernel_size=1,
                 stride=1,
                 padding=0,
@@ -512,30 +519,44 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
             )
         else:
             raise ValueError(f"Invalid x_encoder: {self.model_cfg.x_encoder}")
-
-        if self.model_cfg.pcd_encoder == "mlp":
-            self.action_embedder = nn.Conv1d(
+        
+        # Encoder for y features
+        if self.model_cfg.y_encoder == "mlp":
+            self.y_embedder = nn.Conv1d(
                 in_channels,
-                hidden_size // 2,
+                hidden_size,
                 kernel_size=1,
                 stride=1,
                 padding=0,
                 bias=True,
             )
-            self.anchor_embedder = nn.Conv1d(
-                in_channels, hidden_size, kernel_size=1, stride=1, padding=0, bias=True
-            )
-        elif self.model_cfg.pcd_encoder == "dgcnn":
-            self.action_embedder = DGCNN(
-                input_dims=in_channels, emb_dims=hidden_size // 2
-            )
-            self.anchor_embedder = DGCNN(
+        elif self.model_cfg.y_encoder == "dgcnn":
+            self.y_embedder = DGCNN(
                 input_dims=in_channels, emb_dims=hidden_size
             )
         else:
-            raise ValueError(f"Invalid pcd_encoder: {self.model_cfg.pcd_encoder}")
+            raise ValueError(f"Invalid y_encoder: {self.model_cfg.y_encoder}")            
 
-        # no pos_embed, or y_embedder
+        # Encoder for x0 features
+        if self.model_cfg.x0_encoder == "mlp":
+            self.x0_embedder = nn.Conv1d(
+                in_channels,
+                x_encoder_hidden_dims,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        elif self.model_cfg.x0_encoder == "dgcnn":
+            self.x0_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=x_encoder_hidden_dims
+            )
+        elif self.model_cfg.x0_encoder is None:
+            pass
+        else:
+            raise ValueError(f"Invalid x0_encoder: {self.model_cfg.x0_encoder}")
+
+        # Timestamp embedding
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.blocks = nn.ModuleList(
             [
@@ -543,6 +564,7 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
                 for _ in range(depth)
             ]
         )
+        
         # functionally setting patch size to 1 for a point cloud
         self.final_layer = FinalLayer(hidden_size, 1, self.out_channels)
         self.initialize_weights()
@@ -581,51 +603,39 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
         self,
         x: torch.Tensor,
         t: torch.Tensor,
-        pc_action: torch.Tensor,
-        pc_anchor: torch.Tensor,
+        y: torch.Tensor,
+        x0: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass of DiT with scene cross attention.
 
         Args:
-            x (torch.Tensor): (B, 3, N) tensor of batched action point clouds
+            x (torch.Tensor): (B, D, N) tensor of batched current timestep x (e.g. noised action) features
             t (torch.Tensor): (B,) tensor of diffusion timesteps
-            pc_action (torch.Tensor): (B, 3, N) tensor of un-noised action point clouds
-            pc_anchor (torch.Tensor): (B, 3, N) tensor of un-noised anchor (scene) point clouds
+            y (torch.Tensor): (B, D, N) tensor of un-noised scene (e.g. anchor) features
+            x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
         """
-        # print(f'\nDiT_PointCloud_Unc_Cross.forward(): x.shape={x.shape}, t.shape={t.shape}, pc_action.shape={pc_action.shape}, pc_anchor.shape={pc_anchor.shape}')
-
-        # Get x, action, and anchor embeddings
         x_emb = self.x_embedder(x)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): x_emb.shape={x_emb.shape}')
 
-        pc_action_centered = pc_action - pc_action.mean(dim=-1, keepdim=True)
-        action_emb = self.action_embedder(pc_action_centered)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): action_emb.shape={action_emb.shape}')
+        if self.model_cfg.x0_encoder is not None:
+            assert x0 is not None, "x0 must be provided if x0_encoder is not None"
+            x0_emb = self.x0_embedder(x0)
+            x_emb = torch.cat((x_emb, x0_emb), dim=1)
 
-        anchor_emb = self.anchor_embedder(pc_anchor)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): x_emb.shape={x_emb.shape} | action_emb.shape={action_emb.shape} | anchor_emb.shape={anchor_emb.shape}')
+        if self.model_cfg.y_encoder is not None:
+            y_emb = self.y_embedder(y)
+            y_emb = y_emb.permute(0, 2, 1)
 
-        # Concat x and action embeddings
-        x = torch.cat((x_emb, action_emb), dim=1)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): x.shape={x.shape}')
-
-        x = x.permute(0, 2, 1)
-        anchor_emb = anchor_emb.permute(0, 2, 1)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): x.shape={x.shape} | anchor_emb.shape={anchor_emb.shape}')
+        x = x_emb.permute(0, 2, 1)
 
         c = self.t_embedder(t)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): c.shape={c.shape}')
 
         for block in self.blocks:
-            x = block(x, anchor_emb, c)
-            # print(f'DiT_PointCloud_Unc_Cross.forward(): x.shape={x.shape} | y.shape={anchor_emb.shape} | c.shape={c.shape}')
+            x = block(x, y_emb, c)
 
         x = self.final_layer(x, c)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): x.shape={x.shape}')
 
         x = x.permute(0, 2, 1)
-        # print(f'DiT_PointCloud_Unc_Cross.forward(): x.shape={x.shape}')
 
         return x
 
