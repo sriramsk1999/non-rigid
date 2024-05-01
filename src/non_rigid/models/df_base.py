@@ -88,7 +88,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
     def forward(self, batch, t, mode="train"):
         if self.model_cfg.type == "flow":
             # get flow and pos
-            pos = batch["pc_init"].permute(0, 2, 1)  # channel first
+            pos = batch["pc"].permute(0, 2, 1)  # channel first
             flow = batch["flow"].permute(0, 2, 1)  # channel first
 
             # Setup additional data required by the model
@@ -96,7 +96,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
         # If we are doing cross attention, we need to pass in additional data
         elif self.model_cfg.type == "flow_cross":
-            pos = batch["pc_init"].permute(0, 2, 1)  # channel first
+            pos = batch["pc"].permute(0, 2, 1)  # channel first
             pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # channel first
             flow = batch["flow"].permute(0, 2, 1)  # channel first
             
@@ -148,7 +148,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
     def predict_wta(self, batch, mode):
         if self.model_cfg.type == "flow":
-            pos = batch["pc_init"].to(self.device)
+            pos = batch["pc"].to(self.device)
             gt_flow = batch["flow"].to(self.device)
             seg = batch["seg"].to(self.device)
             mask = True
@@ -174,7 +174,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
             
             model_kwargs = dict(pos=pos)
         elif self.model_cfg.type == "flow_cross":
-            pos = batch["pc_init"].to(self.device)
+            pos = batch["pc"].to(self.device)
             pc_anchor = batch["pc_anchor"].to(self.device)
             gt_flow = batch["flow"].to(self.device)
             seg = None # TODO Rigid dataset doesnt have this
@@ -259,9 +259,9 @@ class FlowPredictionTrainingModule(L.LightningModule):
             
         if self.model_cfg.type == "flow_cross":
             # Visualize predicted vs ground truth
-            viz_idx = np.random.randint(0, batch["pc_init"].shape[0])
+            viz_idx = np.random.randint(0, batch["pc"].shape[0])
             
-            pc_pos_viz = batch["pc_init"][viz_idx, :, :3]
+            pc_pos_viz = batch["pc"][viz_idx, :, :3]
             pc_action_viz = batch["pc_action"][viz_idx, :, :3]
             pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
             
@@ -385,7 +385,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
         return pos, pred_flow
 
     def predict_wta(self, batch, mode):
-        pos = batch["pc_init"]
+        pos = batch["pc"]
         gt_flow = batch["flow"]
         seg = batch["seg"]
         # reshaping and expanding for winner-take-all
@@ -475,7 +475,7 @@ class PointPredictionTrainingModule(L.LightningModule):
     def forward(self, batch, t, mode="train"):
         # Extract point clouds from batch
         
-        pos = batch["pc_init"].permute(0, 2, 1)  # B, C, N
+        pos = batch["pc"].permute(0, 2, 1)  # B, C, N
         pc_action = batch["pc_action"].permute(0, 2, 1)  # B, C, N
         pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # B, C, N
 
@@ -541,7 +541,7 @@ class PointPredictionTrainingModule(L.LightningModule):
         return model_kwargs, pred_action, results
 
     def predict_wta(self, batch: Dict[str, torch.Tensor], mode: str):
-        pos = batch["pc_init"].to(self.device)
+        pos = batch["pc"].to(self.device)
         pc_action = batch["pc_action"].to(self.device)
         pc_anchor = batch["pc_anchor"].to(self.device)
 
@@ -627,9 +627,9 @@ class PointPredictionTrainingModule(L.LightningModule):
         )
 
         # Visualize predicted vs ground truth
-        viz_idx = np.random.randint(0, batch["pc_init"].shape[0])
+        viz_idx = np.random.randint(0, batch["pc"].shape[0])
 
-        pc_pos_viz = batch["pc_init"][viz_idx, :, :3]
+        pc_pos_viz = batch["pc"][viz_idx, :, :3]
         pc_action_viz = batch["pc_action"][viz_idx, :, :3]
         pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
 

@@ -155,8 +155,8 @@ def main(cfg):
     VISUALIZE_SINGLE = True
     VISUALIZE_SINGLE_IDX = 10
     
-    SHOW_FIG = False
-    SAVE_FIG = True
+    SHOW_FIG = True
+    SAVE_FIG = False
 
 
     ######################################################################
@@ -228,7 +228,7 @@ def main(cfg):
         if cfg.model.type == "point_cross":
             bs = 1
             data = datamodule.val_dataset[VISUALIZE_SINGLE_IDX]
-            pos = data["pc_init"].unsqueeze(0).to(device)
+            pos = data["pc"].unsqueeze(0).to(device)
             pc_action = data["pc_action"].unsqueeze(0).to(device)
             pc_anchor = data["pc_anchor"].unsqueeze(0).to(device)
             
@@ -264,7 +264,7 @@ def main(cfg):
             # load val dataset at once
             val_action = []
             for i in range(len(datamodule.val_dataset)):
-                val_action.append(datamodule.val_dataset[i]["pc_init"])
+                val_action.append(datamodule.val_dataset[i]["pc"])
             val_action = torch.stack(val_action).to(device)
 
             viz_batch_idx=0
@@ -296,7 +296,7 @@ def main(cfg):
             print(precision_rmses.mean())
         elif cfg.model.type == "flow_cross":
             data = datamodule.val_dataset[0]
-            pos = data["pc_init"].unsqueeze(0).to(device)
+            pos = data["pc"].unsqueeze(0).to(device)
             pc_anchor = data["pc_anchor"].unsqueeze(0).to(device)
             
             bs = 1
@@ -365,9 +365,9 @@ def main(cfg):
             
             if cfg.model.type == "point_cross":
                 pred_pc = pred_actions.detach().cpu()
-                gt_pc = batch["pc_init"]
+                gt_pc = batch["pc"]
             elif cfg.model.type == "flow_cross":
-                pred_pc = batch["pc_init"] + pred_actions.detach().cpu()
+                pred_pc = batch["pc"] + pred_actions.detach().cpu()
                 gt_pc = batch["pc_action"]
 
             gt_pc_t = gt_pc.flatten(end_dim=-2).cpu().numpy()
@@ -384,7 +384,7 @@ def main(cfg):
         anchor_pc = data["pc_anchor"]
         anchor_seg = np.zeros(anchor_pc.shape[0], dtype=np.int64)*1
 
-        pos = data["pc_init"]
+        pos = data["pc"]
         pos_seg = np.ones(pos.shape[0], dtype=np.int64)*1
         
         action_pc = data["pc_action"]
@@ -410,7 +410,7 @@ def main(cfg):
         
         data = datamodule.val_dataset[VISUALIZE_SINGLE_IDX]
         if cfg.model.type == "point_cross":
-            pos = data["pc_init"]
+            pos = data["pc"]
             pc_action = data["pc_action"]
             pc_anchor = data["pc_anchor"]
             
@@ -439,7 +439,7 @@ def main(cfg):
             if SAVE_FIG:
                 fig.write_html("pcd.html")
         elif cfg.model.type == "flow_cross":
-            pos = data["pc_init"]
+            pos = data["pc"]
             pc_anchor = data["pc_anchor"]
             pc_action = data["pc_action"]
             

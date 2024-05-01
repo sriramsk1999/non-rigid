@@ -142,7 +142,7 @@ class RigidPointDataset(data.Dataset):
         points_action = points_action - points_action.mean(dim=0)
         
         return {
-            "pc_init": goal_points_action, # Action points in goal position
+            "pc": goal_points_action, # Action points in goal position
             "pc_anchor": goal_points_anchor, # Anchor points in goal position
             "pc_action": points_action, # Action points for context
             "T0": T0.get_matrix().squeeze(0).T,
@@ -254,7 +254,7 @@ class RigidFlowDataset(data.Dataset):
         flow = goal_points_action - points_action
         
         return {
-            "pc_init": points_action, # Action points in starting position
+            "pc": points_action, # Action points in starting position
             "pc_anchor": goal_points_anchor, # Anchor points in goal position
             "pc_action": goal_points_action, # Action points in goal position
             "flow": flow,
