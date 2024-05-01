@@ -56,10 +56,10 @@ class RigidPointDataset(data.Dataset):
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
-        if self.dataset_cfg.num_demos is not None:
+        if self.dataset_cfg.num_demos is not None and self.type == "train":
             self.demo_files = self.demo_files[: self.dataset_cfg.num_demos]
             self.num_demos = len(self.demo_files)
-        print(f"Loaded {self.num_demos} demos from {self.dataset_dir}")
+        print(f"Loaded {self.num_demos} {self.type} demos from {self.dataset_dir}")
 
     def __len__(self):
         if self.type == "train":
@@ -166,10 +166,10 @@ class RigidFlowDataset(data.Dataset):
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
-        if self.dataset_cfg.num_demos is not None:
+        if self.dataset_cfg.num_demos is not None and self.type == "train":
             self.demo_files = self.demo_files[: self.dataset_cfg.num_demos]
             self.num_demos = len(self.demo_files)
-        print(f"Loaded {self.num_demos} demos from {self.dataset_dir}")
+        print(f"Loaded {self.num_demos} {self.type} demos from {self.dataset_dir}")
 
     def __len__(self):
         if self.type == "train":

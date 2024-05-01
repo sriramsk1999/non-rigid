@@ -144,13 +144,13 @@ class FlowPredictionTrainingModule(L.LightningModule):
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
                     model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
-        return model_kwargs, pred_flow
+        return model_kwargs, pred_flow, results
 
     def predict_wta(self, batch, mode):
         if self.model_cfg.type == "flow":
-            pos = batch["pc_init"]
-            gt_flow = batch["flow"]
-            seg = batch["seg"]
+            pos = batch["pc_init"].to(self.device)
+            gt_flow = batch["flow"].to(self.device)
+            seg = batch["seg"].to(self.device)
             mask = True
             
             # reshaping and expanding for winner-take-all
@@ -174,9 +174,9 @@ class FlowPredictionTrainingModule(L.LightningModule):
             
             model_kwargs = dict(pos=pos)
         elif self.model_cfg.type == "flow_cross":
-            pos = batch["pc_init"]
-            pc_anchor = batch["pc_anchor"]
-            gt_flow = batch["flow"]
+            pos = batch["pc_init"].to(self.device)
+            pc_anchor = batch["pc_anchor"].to(self.device)
+            gt_flow = batch["flow"].to(self.device)
             seg = None # TODO Rigid dataset doesnt have this
             mask = False
             
@@ -206,7 +206,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
             )
         
         # generating diffusion predictions
-        model_kwargs, pred_flow = self.predict(bs, model_kwargs, self.num_wta_trials, unflatten=False)
+        model_kwargs, pred_flow, results = self.predict(bs, model_kwargs, self.num_wta_trials, unflatten=False)
         # computing wta errors
         cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
             bs, self.num_wta_trials
@@ -220,14 +220,6 @@ class FlowPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_flows_wta = pred_flow[torch.arange(bs), winner]
-        self.log_dict(
-            {
-                f"{mode}_wta/cos_sim": cos_sim_wta.mean(),
-                f"{mode}_wta/rmse": rmse_wta.mean(),
-            },
-            add_dataloader_idx=False,
-            prog_bar=True,
-        )
         return pred_flows_wta, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
@@ -251,13 +243,19 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
-        # if new epoch, clear cache
-        # if batch_idx == 0:
-        #     self.mode_distribution_cache = {"x": None, "y": None}
         with torch.no_grad():
             pred_flows_wta, cos_sim_wta, rmse_wta = self.predict_wta(
                 batch, mode="val"
             )
+            
+        self.log_dict(
+            {
+                f"val_wta/cos_sim": cos_sim_wta.mean(),
+                f"val_wta/rmse": rmse_wta.mean(),
+            },
+            add_dataloader_idx=False,
+            prog_bar=True,
+        )
             
         if self.model_cfg.type == "flow_cross":
             # Visualize predicted vs ground truth
@@ -301,12 +299,11 @@ class FlowPredictionTrainingModule(L.LightningModule):
                 )
             ]
             predicted_vs_gt_wta_tensors = [
-                pc_pos_viz,
                 pc_action_viz,
                 pc_anchor_viz,
                 pred_action_wta_viz,
             ]
-            predicted_vs_gt_wta_colors = ["yellow", "green", "red", "blue"]
+            predicted_vs_gt_wta_colors = ["green", "red", "blue"]
             predicted_vs_gt_wta = get_color(
                 tensor_list=predicted_vs_gt_wta_tensors,
                 color_list=predicted_vs_gt_wta_colors,
@@ -321,6 +318,16 @@ class FlowPredictionTrainingModule(L.LightningModule):
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         # no test for now
         pass
+    
+    @torch.no_grad()
+    def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
+        pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+            batch, mode="val"
+        )
+        return {
+            "cos_sim": cos_sim_wta,
+            "rmse": rmse_wta,
+        }
 
 
 # TODO: inference module
@@ -538,8 +545,6 @@ class PointPredictionTrainingModule(L.LightningModule):
         pc_action = batch["pc_action"].to(self.device)
         pc_anchor = batch["pc_anchor"].to(self.device)
 
-        print(f'self.sample_size: {self.sample_size}')
-
         # reshaping and expanding for winner-take-all
         bs = pc_action.shape[0]
         gt_action = (
@@ -661,11 +666,10 @@ class PointPredictionTrainingModule(L.LightningModule):
         ]
         predicted_vs_gt_wta_tensors = [
             pc_pos_viz,
-            pc_action_viz,
             pc_anchor_viz,
             pred_action_wta_viz,
         ]
-        predicted_vs_gt_wta_colors = ["green", "yellow", "red", "blue"]
+        predicted_vs_gt_wta_colors = ["green", "red", "blue"]
         predicted_vs_gt_wta = get_color(
             tensor_list=predicted_vs_gt_wta_tensors,
             color_list=predicted_vs_gt_wta_colors,

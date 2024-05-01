@@ -113,7 +113,8 @@ class FlowNetAnimation:
             scene_camera=camera,
             width=1200,
             height=1200,
-            scene1=rvpl._3d_scene(self.pos),
+            template="plotly_white",
+            scene1=rvpl._3d_scene(self.pos, domain_scale=1.5),
             updatemenus=[
                 {
                     "buttons": [

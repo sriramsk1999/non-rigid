@@ -15,7 +15,12 @@ import plotly.graph_objects as go
 from rpad.visualize_3d.plots import flow_fig, _flow_traces, pointcloud, _3d_scene
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataset, ProcClothFlowDataModule
 from non_rigid.datasets.rigid import RigidPointDataset, RigidFlowDataset, RigidDataModule
-from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule, PointPredictionTrainingModule
+from non_rigid.models.df_base import (
+    DiffusionFlowBase, 
+    FlowPredictionInferenceModule, 
+    FlowPredictionTrainingModule,
+    PointPredictionTrainingModule
+)
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
@@ -113,8 +118,10 @@ def main(cfg):
     # Set up the model
     ######################################################################
     
-    if cfg.model.type in ["flow", "flow_cross"]:
+    if cfg.model.type in ["flow"]:
         model = FlowPredictionInferenceModule(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
+    elif cfg.model.type in ["flow_cross"]:
+        model = FlowPredictionTrainingModule(network, training_cfg=cfg.inference, model_cfg=cfg.model)
     elif cfg.model.type == "point_cross":
         model = PointPredictionTrainingModule(network, training_cfg=cfg.inference, model_cfg=cfg.model)
     else:
@@ -144,9 +151,12 @@ def main(cfg):
 
     MMD_METRICS = True
     PRECISION_METRICS = True
-    VISUALIZE_ALL = True
+    VISUALIZE_ALL = False
     VISUALIZE_SINGLE = True
-    VISUALIZE_SINGLE_IDX = 0
+    VISUALIZE_SINGLE_IDX = 10
+    
+    SHOW_FIG = False
+    SAVE_FIG = True
 
 
     ######################################################################
@@ -195,7 +205,10 @@ def main(cfg):
             outputs = flatten_outputs(out_cpu)
             # plot histogram
             fig = px.histogram(outputs["rmse"], nbins=100, title=f"{name} MMD RMSE")
-            fig.show()
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html(f"{name}_mmd_histogram.html")
             # Compute the metrics.
             cos_sim = torch.mean(outputs["cos_sim"])
             rmse = torch.mean(outputs["rmse"])
@@ -213,12 +226,12 @@ def main(cfg):
         model.to(device)
 
         if cfg.model.type == "point_cross":
-            data = datamodule.val_dataset[0]
+            bs = 1
+            data = datamodule.val_dataset[VISUALIZE_SINGLE_IDX]
             pos = data["pc_init"].unsqueeze(0).to(device)
             pc_action = data["pc_action"].unsqueeze(0).to(device)
             pc_anchor = data["pc_anchor"].unsqueeze(0).to(device)
             
-            bs = 1
             pc_action = (
                 pc_action.transpose(-1, -2)
                 .unsqueeze(1)
@@ -237,14 +250,16 @@ def main(cfg):
                 x0=pc_action
             )
             model_kwargs, pred_actions, results = model.predict(bs, model_kwargs, num_samples, False)
-            
             preds = pred_actions.cpu().numpy().reshape(-1, 3)
 
             # top - down heat map
             fig = px.density_heatmap(x=preds[:, 0], y=preds[:, 1], 
                                         nbinsx=100, nbinsy=100,
                                         title="Predicted Flows XY Heatmap")
-            fig.show()
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("heatmap.html")
 
             # load val dataset at once
             val_action = []
@@ -252,12 +267,18 @@ def main(cfg):
                 val_action.append(datamodule.val_dataset[i]["pc_init"])
             val_action = torch.stack(val_action).to(device)
 
+            viz_batch_idx=0
             fig = go.Figure()
-            fig.add_trace(pointcloud(pred_actions[0].detach().cpu(), downsample=1, scene="scene1", name="Predicted PCD"))
+            fig.add_trace(pointcloud(pc_anchor[0 + viz_batch_idx*num_samples].permute(1, 0).detach().cpu(), downsample=1, scene="scene1", name="Anchor PCD"))
+            for i in range(num_samples):
+                fig.add_trace(pointcloud(pred_actions[i + viz_batch_idx*num_samples].detach().cpu(), downsample=1, scene="scene1", name=f"Predicted PCD {i}"))
             for i in range(val_action.shape[0]):
                 fig.add_trace(pointcloud(val_action[i].detach().cpu(), downsample=1, scene="scene1", name=f"Goal Action PCD {i}"))
-            fig.update_layout(scene1=_3d_scene(pred_actions[0].detach().cpu()))
-            fig.show()
+            fig.update_layout(scene1=_3d_scene(pred_actions[0 + viz_batch_idx*num_samples].detach().cpu(), domain_scale=3))
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("multi_pred_pcd.html")
 
             precision_rmses = []
             for i in tqdm(range(pred_actions.shape[0])):
@@ -268,7 +289,65 @@ def main(cfg):
             precision_rmses = torch.stack(precision_rmses)
             fig = px.histogram(precision_rmses.cpu().numpy(), 
                                 nbins=20, title="Precision RMSE")
-            fig.show()
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("histogram.html")
+            print(precision_rmses.mean())
+        elif cfg.model.type == "flow_cross":
+            data = datamodule.val_dataset[0]
+            pos = data["pc_init"].unsqueeze(0).to(device)
+            pc_anchor = data["pc_anchor"].unsqueeze(0).to(device)
+            
+            bs = 1
+            pos = (
+                pos.transpose(-1, -2)
+                .unsqueeze(1)
+                .expand(-1, num_samples, -1, -1)
+                .reshape(bs * num_samples, -1, cfg.dataset.sample_size)
+            )
+            pc_anchor = (
+                pc_anchor.transpose(-1, -2)
+                .unsqueeze(1)
+                .expand(-1, num_samples, -1, -1)
+                .reshape(bs * num_samples, -1, cfg.dataset.sample_size)
+            )
+            
+            model_kwargs = dict(
+                y=pc_anchor,
+                x0=pos
+            )
+            model_kwargs, pred_flows, results = model.predict(bs, model_kwargs, num_samples, False)
+            preds = (model_kwargs["x0"] + pred_flows).cpu().numpy().reshape(-1, 3)
+            
+            # top - down heat map
+            fig = px.density_heatmap(x=preds[:, 0], y=preds[:, 1], 
+                                        nbinsx=100, nbinsy=100,
+                                        title="Predicted Flows XY Heatmap")
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("heatmap.html")
+            
+            # load val dataset at once
+            val_flows = []
+            for i in range(len(datamodule.val_dataset)):
+                val_flows.append(datamodule.val_dataset[i]["flow"])
+            val_flows = torch.stack(val_flows).to(device)
+            
+            precision_rmses = []
+            for i in tqdm(range(pred_flows.shape[0])):
+                pf = pred_flows[[i]].expand(val_flows.shape[0], -1, -1)
+                rmse = flow_rmse(pf, val_flows, mask=False, seg=None)
+                rmse_match = torch.min(rmse)
+                precision_rmses.append(rmse_match)
+            precision_rmses = torch.stack(precision_rmses)
+            fig = px.histogram(precision_rmses.cpu().numpy(), 
+                                nbins=20, title="Precision RMSE")
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("histogram.html")
             print(precision_rmses.mean())
         else:
             raise ValueError(f"Model type {cfg.model.type} not recognized.")
@@ -284,8 +363,12 @@ def main(cfg):
         for batch in tqdm(datamodule.val_dataloader()):
             pred_actions, _, _ = model.predict_wta(batch, "val")
             
-            pred_pc = pred_actions
-            gt_pc = batch["pc_init"]
+            if cfg.model.type == "point_cross":
+                pred_pc = pred_actions.detach().cpu()
+                gt_pc = batch["pc_init"]
+            elif cfg.model.type == "flow_cross":
+                pred_pc = batch["pc_init"] + pred_actions.detach().cpu()
+                gt_pc = batch["pc_action"]
 
             gt_pc_t = gt_pc.flatten(end_dim=-2).cpu().numpy()
             pred_pc_t = pred_pc.flatten(end_dim=-2).cpu().numpy()
@@ -294,9 +377,6 @@ def main(cfg):
         
         pred_pcs_t = np.concatenate(pred_pcs_t)
         pred_seg = np.array([np.arange(3, 19)] * cfg.dataset.sample_size).T.flatten()
-
-        gt_pcs_t = np.concatenate(gt_pcs_t)
-        gt_seg = np.array([np.arange(19, 35)] * cfg.dataset.sample_size).T.flatten()
         
         # Get other pcds from single example. TODO: These change across examples, change this to something better
         data = datamodule.val_dataset[0]
@@ -316,7 +396,10 @@ def main(cfg):
             np.concatenate((pred_pcs_t, anchor_pc, action_pc, pos)), 
             np.concatenate((pred_seg, anchor_seg, action_seg, pos_seg)),
         )
-        fig.show()
+        if SHOW_FIG:
+            fig.show()
+        if SAVE_FIG:
+            fig.write_html("viz_all.html")
 
 
     # plot single diffusion chain
@@ -326,57 +409,85 @@ def main(cfg):
         animation = FlowNetAnimation()
         
         data = datamodule.val_dataset[VISUALIZE_SINGLE_IDX]
-        pos = data["pc_init"]
-        pc_action = data["pc_action"]
-        pc_anchor = data["pc_anchor"]
-        
-        pc_action = pc_action.unsqueeze(0).permute(0, 2, 1).to(device)
-        pc_anchor = pc_anchor.unsqueeze(0).permute(0, 2, 1).to(device)
-        
-        # z = torch.randn(1, cfg.dataset.sample_size, 3).cuda().transpose(-1, -2) * model.noise_scale
-        model_kwargs = dict(
-            y=pc_anchor,
-            x0=pc_action, 
-        )
-        # # denoise
-        # pred_pos, results = diffusion.p_sample_loop(
-        #     network, z.shape, z, clip_denoised=False,
-        #     model_kwargs=model_kwargs, progress=True, device=device
-        # )
-        model_kwargs, pred_pos, results = model.predict(1, model_kwargs, 1, False)
-        
-        pred_pos = pred_pos[0].cpu()
-        pos = pos.cpu()
-        pcd = pc_action[0].permute(1, 0).cpu()
-        anchor_pc = pc_anchor[0].permute(1, 0).cpu()
+        if cfg.model.type == "point_cross":
+            pos = data["pc_init"]
+            pc_action = data["pc_action"]
+            pc_anchor = data["pc_anchor"]
+            
+            pc_action = pc_action.unsqueeze(0).permute(0, 2, 1).to(device)
+            pc_anchor = pc_anchor.unsqueeze(0).permute(0, 2, 1).to(device)
+            
+            model_kwargs = dict(
+                y=pc_anchor,
+                x0=pc_action, 
+            )
+            model_kwargs, pred_pos, results = model.predict(1, model_kwargs, 1, False)
+            
+            pred_pos = pred_pos[0].cpu()
+            pos = pos.cpu()
+            pcd = pc_action[0].permute(1, 0).cpu()
+            anchor_pc = pc_anchor[0].permute(1, 0).cpu()
 
-        # combined_pcd = torch.cat([torch.as_tensor(anchor_pc), torch.as_tensor(pos)], dim=0)
+            fig = go.Figure()
+            fig.add_trace(pointcloud(pos, downsample=1, scene="scene1", name="Goal Action PCD"))
+            fig.add_trace(pointcloud(anchor_pc, downsample=1, scene="scene1", name="Anchor PCD"))
+            fig.add_trace(pointcloud(pcd, downsample=1, scene="scene1", name="Context Action PCD"))
+            fig.add_trace(pointcloud(pred_pos, downsample=1, scene="scene1", name="Predicted PCD"))
+            fig.update_layout(scene1=_3d_scene(torch.cat([pred_pos, pos, anchor_pc], dim=0).detach().cpu()))
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("pcd.html")
+        elif cfg.model.type == "flow_cross":
+            pos = data["pc_init"]
+            pc_anchor = data["pc_anchor"]
+            pc_action = data["pc_action"]
+            
+            pos = pos.unsqueeze(0).permute(0, 2, 1).to(device)
+            pc_anchor = pc_anchor.unsqueeze(0).permute(0, 2, 1).to(device)
+            pc_action = pc_action.unsqueeze(0).permute(0, 2, 1).to(device)
+            
+            model_kwargs = dict(
+                y=pc_anchor,
+                x0=pos, 
+            )
+            model_kwargs, pred_flow, results = model.predict(1, model_kwargs, 1, False)
+            
+            pred_flow = pred_flow[0].permute(1, 0).cpu()
+            pcd = pos[0].permute(1, 0).cpu()
+            print(pcd.shape, pred_flow.shape)
+            pred_pos = pcd + pred_flow.permute(1, 0)
+            print(pred_pos.shape)
+            pc_action = pc_action[0].permute(1, 0).cpu()
+            pc_anchor = pc_anchor[0].permute(1, 0).cpu()
+            
+            combined_pcd = torch.cat([pc_anchor, pcd], dim=0)
 
-        # for noise_step in tqdm(results[0:]):
-        #     pred_pos_step = noise_step[viz_idx].permute(1, 0).cpu()
-        #     animation.add_trace(
-        #         combined_pcd,
-        #         [pcd],
-        #         [pred_pos_step - pos],#combined_flow,
-        #         "red",
-        #     )
+            for noise_step in tqdm(results[0:]):
+                pred_flow_step = noise_step[0].permute(1, 0).cpu()
+                animation.add_trace(
+                    combined_pcd,
+                    [pcd],
+                    [pred_flow_step],#combined_flow,
+                    "red",
+                )
 
-        # fig = animation.animate()
-        # fig.show()
-        
-        fig = go.Figure()
-        
-        fig.add_trace(pointcloud(pos, downsample=1, scene="scene1", name="Goal Action PCD"))
-        fig.add_trace(pointcloud(anchor_pc, downsample=1, scene="scene1", name="Anchor PCD"))
-        fig.add_trace(pointcloud(pcd, downsample=1, scene="scene1", name="Context Action PCD"))
-        fig.add_trace(pointcloud(pred_pos, downsample=1, scene="scene1", name="Predicted PCD"))
-        
-        fig.update_layout(scene1=_3d_scene(torch.cat([pred_pos, pos, anchor_pc], dim=0).detach().cpu()))
-        fig.show()
-        
-        
-        # fig.write_html("/home/odonca/workspace/rpad/non-rigid/animation.html")
-        
+            fig = animation.animate()
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("animation.html")
+            
+            fig = go.Figure()
+            fig.add_trace(pointcloud(pc_action, downsample=1, scene="scene1", name="Goal Action PCD"))
+            fig.add_trace(pointcloud(pc_anchor, downsample=1, scene="scene1", name="Anchor PCD"))
+            fig.add_trace(pointcloud(pcd, downsample=1, scene="scene1", name="Starting Action PCD"))
+            fig.add_trace(pointcloud(pred_pos, downsample=1, scene="scene1", name="Final Predicted PCD"))
+            fig.update_layout(scene1=_3d_scene(torch.cat([pred_pos.cpu(), pcd.cpu(), pc_anchor.cpu()], dim=0).detach().cpu()))
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("pcd.html")
 
 
 if __name__ == "__main__":

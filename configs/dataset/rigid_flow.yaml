@@ -1,10 +1,10 @@
 name: rigid_flow
 # data_dir: ~/datasets/nrp/ProcCloth/single_cloth/demos
-data_dir: /home/odonca/workspace/rpad/data/rpdiff/data/overfit_1r_1m_1d
+data_dir: /home/odonca/workspace/rpad/data/rpdiff/data/overfit_1r_1m_150d
 type: rigid_flow
 
 # Dataset general options
-num_demos: 1 # Number of demonstrations to load
+num_demos: 10 # Number of demonstrations to load
 train_dataset_size: 1024 # Length of the train dataset
 val_dataset_size: 64 # Length of the validation dataset
 
