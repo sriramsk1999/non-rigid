@@ -107,11 +107,12 @@ class FlowNetAnimation:
             eye=dict(x=-1.5, y=0, z=1.5),
         )
         self.fig.update_layout(
-            title="FlowNet Flow Prediction",
+            title="Flow Prediction",
             scene_camera=camera,
             width=600,
             height=600,
             scene1=rvpl._3d_scene(self.pos),
+            template="plotly_white",
             updatemenus=[
                 {
                     "buttons": [

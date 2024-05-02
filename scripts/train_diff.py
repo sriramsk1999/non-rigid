@@ -69,6 +69,7 @@ def main(cfg):
         val_batch_size=cfg.training.val_batch_size,
         num_workers=cfg.resources.num_workers,
         type=cfg.dataset.type,
+        **cfg.dataset.type_args,
     )
 
     ######################################################################

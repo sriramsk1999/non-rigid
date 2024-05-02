@@ -66,7 +66,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
     def forward(self, x, t, mode="train"):
         # get flow and pos
-        pos = x["pc_init"]
+        pos = x["pc"]
         flow = x["flow"]
 
         # channel first
@@ -114,7 +114,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
         return pos, pred_flow
 
     def predict_wta(self, batch, mode):
-        pos = batch["pc_init"]
+        pos = batch["pc"]
         gt_flow = batch["flow"]
         seg = batch["seg"]
         # reshaping and expanding for winner-take-all
@@ -196,7 +196,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
         raise NotImplementedError("Inference module should not use forward method - use 'predict' instead.")
 
     @torch.no_grad()
-    def predict(self, pos, num_samples, unflatten=False):
+    def predict(self, pos, num_samples, unflatten=False, return_results=False):
         """
         unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return 
             with shape (batch_size * num_samples, ...)
@@ -215,13 +215,20 @@ class FlowPredictionInferenceModule(L.LightningModule):
         )
         pred_flow = pred_flow.permute(0, 2, 1)
         pos = pos.permute(0, 2, 1)
+        if return_results:
+            results = [r.permute(0, 2, 1) for r in results]
         if unflatten:
             pos = pos.reshape(bs, num_samples, self.sample_size, -1)
             pred_flow = pred_flow.reshape(bs, num_samples, self.sample_size, -1)
-        return pos, pred_flow
+            if return_results:
+                results = [r.reshape(bs, num_samples, self.sample_size, -1) for r in results]
+        if return_results:
+            return pos, pred_flow, results
+        else:
+            return pos, pred_flow
 
     def predict_wta(self, batch, mode):
-        pos = batch["pc_init"]
+        pos = batch["pc"]
         gt_flow = batch["flow"]
         seg = batch["seg"]
         # reshaping and expanding for winner-take-all

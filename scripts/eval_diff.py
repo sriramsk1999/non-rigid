@@ -172,13 +172,42 @@ def main(cfg):
     num_wta_trials = 50
     diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
 
-    get_train_dataset_metrics = True
-    get_val_dataset_metrics = True
+    get_train_dataset_metrics = False
+    get_val_dataset_metrics = False
     visualize_all_predictions = False
     visualize_single_prediction = True
-    visualize_single_prediction_idx = 10
+    visualize_single_prediction_idx = 7
 
     import plotly.express as px
+
+
+    # plotting single data example
+    import rpad.visualize_3d.plots as vpl
+    sample = val_dataset[0]
+    pc = sample['pc_init']
+    t_wc = sample['t_wc']
+    seg = sample['seg']
+    flow = sample['flow']
+    goal = pc + flow
+    pc_t = torch.cat([pc, torch.ones(pc.shape[0], 1)], axis=-1) @ t_wc.permute(1, 0)
+    pc_t = pc_t[:, :3]
+    goal_t = torch.cat([goal, torch.ones(goal.shape[0], 1)], axis=-1) @ t_wc.permute(1, 0)
+    goal_t = goal_t[:, :3]
+
+
+    rot = torch.tensor([[-1.0, 0, 0], [0, -1, 0], [0, 0, 1]])
+    pc_t = pc_t @ rot.T
+    goal_t = goal_t @ rot.T
+
+    fig = vpl.segmentation_fig(pc_t, seg)
+    fig.show()
+
+    traces = vpl._flow_traces(pc_t, goal_t - pc_t, flowscale=1, name="gt_flow")
+    for t in traces:
+        fig.add_trace(t)
+    fig.show()
+    quit()
+
 
     # train dataset metrics
     if get_train_dataset_metrics:
