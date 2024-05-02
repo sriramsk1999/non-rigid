@@ -9,11 +9,15 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+import omegaconf
 import torch
 import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from typing import Optional
+
+from non_rigid.nets.dgcnn import DGCNN
 
 
 def modulate(x, shift, scale):
@@ -93,9 +97,70 @@ class LabelEmbedder(nn.Module):
         embeddings = self.embedding_table(labels)
         return embeddings
 
+#################################################################################
+#                                 Custom Attention Layers                       #
+#################################################################################
+
+
+class CrossAttention(nn.Module):
+    """
+    Cross attention layer adapted from
+    https://github.com/pprp/timm/blob/e9aac412de82310e6905992e802b1ee4dc52b5d1/timm/models/crossvit.py#L132
+    """
+
+    def __init__(
+        self,
+        dim_x: int,
+        dim_y: int,
+        num_heads: int = 4,
+        qkv_bias: bool = False,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        assert dim_x % num_heads == 0, "dim x must be divisible by num_heads"
+        head_dim = dim_x // num_heads
+        self.scale = head_dim**-0.5
+
+        self.wq = nn.Linear(dim_x, dim_x, bias=qkv_bias)
+        self.wk = nn.Linear(dim_y, dim_x, bias=qkv_bias)
+        self.wv = nn.Linear(dim_y, dim_x, bias=qkv_bias)
+        self.proj = nn.Linear(dim_x, dim_x)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x, y):
+        B, N, Cx = x.shape
+        _, _, Cy = y.shape
+        q = (
+            self.wq(x)
+            .reshape(B, N, self.num_heads, Cx // self.num_heads)
+            .transpose(1, 2)
+        )
+        k = (
+            self.wk(y)
+            .reshape(B, N, self.num_heads, Cx // self.num_heads)
+            .transpose(1, 2)
+        )
+        v = (
+            self.wv(y)
+            .reshape(B, N, self.num_heads, Cx // self.num_heads)
+            .transpose(1, 2)
+        )
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, Cx)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
 
 #################################################################################
-#                                 Core DiT Model                                #
+#                                 Core DiT Layers                               #
 #################################################################################
 
 class DiTBlock(nn.Module):
@@ -122,6 +187,64 @@ class DiTBlock(nn.Module):
         return x
 
 
+class DiTCrossBlock(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning and scene cross attention.
+    """
+
+    def __init__(
+        self, hidden_size: int, num_heads: int, mlp_ratio: float = 4.0, **block_kwargs
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.self_attn = Attention(
+            hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs
+        )
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.cross_attn = CrossAttention(
+            dim_x=hidden_size,
+            dim_y=hidden_size,
+            num_heads=num_heads,
+            qkv_bias=True,
+            **block_kwargs,
+        )
+        self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(
+            in_features=hidden_size,
+            hidden_features=mlp_hidden_dim,
+            act_layer=approx_gelu,
+            drop=0,
+        )
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(), nn.Linear(hidden_size, 9 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, y, c):
+        (
+            shift_msa,
+            scale_msa,
+            gate_msa,
+            shift_mca,
+            scale_mca,
+            gate_mca,
+            shift_x,
+            scale_x,
+            gate_x,
+        ) = self.adaLN_modulation(c).chunk(9, dim=1)
+        x = x + gate_msa.unsqueeze(1) * self.self_attn(
+            modulate(self.norm1(x), shift_msa, scale_msa)
+        )
+        x = x + gate_mca.unsqueeze(1) * self.cross_attn(
+            modulate(self.norm2(x), shift_mca, scale_mca), y
+        )
+        x = x + gate_x.unsqueeze(1) * self.mlp(
+            modulate(self.norm3(x), shift_x, scale_x)
+        )
+        return x
+
+
 class FinalLayer(nn.Module):
     """
     The final layer of DiT.
@@ -141,6 +264,9 @@ class FinalLayer(nn.Module):
         x = self.linear(x)
         return x
 
+#################################################################################
+#                                 Core DiT Models                               #
+#################################################################################
 
 class DiT(nn.Module):
     """
@@ -266,11 +392,7 @@ class DiT(nn.Module):
         return torch.cat([eps, rest], dim=1)
 
 
-
-
 ### CREATING NEW DiT (unconditional) FOR POINT CLOUD INPUTS ###
-    
-
 class DiT_PointCloud_Unc(nn.Module):
     """
     Diffusion model with a Transformer backbone - point cloud, unconditional.
@@ -283,6 +405,7 @@ class DiT_PointCloud_Unc(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         learn_sigma=True,
+        model_cfg=None,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -340,7 +463,7 @@ class DiT_PointCloud_Unc(nn.Module):
         x = torch.cat((x, pos), dim=1)
         x = torch.transpose(self.x_embedder(x), -1, -2)
         c = self.t_embedder(t)
-        
+
         for block in self.blocks:
             x = block(x, c)
         x = self.final_layer(x, c)
@@ -354,6 +477,167 @@ class DiT_PointCloud_Unc(nn.Module):
         # x = self.final_layer(x, c)               # (N, L, patch_size ** 2 * out_channels)
         return x
 
+
+class DiT_PointCloud_Unc_Cross(nn.Module):
+    """
+    Diffusion model with a Transformer backbone - point cloud, unconditional, with scene cross attention
+    """
+
+    def __init__(
+        self,
+        in_channels=3,
+        hidden_size=1152,
+        depth=28,
+        num_heads=16,
+        mlp_ratio=4.0,
+        learn_sigma=True,
+        model_cfg=None,
+    ):
+        super().__init__()
+        self.learn_sigma = learn_sigma
+        self.in_channels = in_channels
+        # self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.out_channels = 6 if learn_sigma else 3
+        self.num_heads = num_heads
+        self.model_cfg = model_cfg
+
+        x_encoder_hidden_dims = hidden_size
+        if self.model_cfg.x_encoder is not None and self.model_cfg.x0_encoder is not None:
+            # We are concatenating x and x0 features so we halve the hidden size
+            x_encoder_hidden_dims = hidden_size // 2
+
+        # Encoder for current timestep x features       
+        if self.model_cfg.x_encoder == "mlp":
+            # x_embedder is conv1d layer instead of 2d patch embedder
+            self.x_embedder = nn.Conv1d(
+                in_channels,
+                x_encoder_hidden_dims,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        else:
+            raise ValueError(f"Invalid x_encoder: {self.model_cfg.x_encoder}")
+        
+        # Encoder for y features
+        if self.model_cfg.y_encoder == "mlp":
+            self.y_embedder = nn.Conv1d(
+                in_channels,
+                hidden_size,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        elif self.model_cfg.y_encoder == "dgcnn":
+            self.y_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=hidden_size
+            )
+        else:
+            raise ValueError(f"Invalid y_encoder: {self.model_cfg.y_encoder}")            
+
+        # Encoder for x0 features
+        if self.model_cfg.x0_encoder == "mlp":
+            self.x0_embedder = nn.Conv1d(
+                in_channels,
+                x_encoder_hidden_dims,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        elif self.model_cfg.x0_encoder == "dgcnn":
+            self.x0_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=x_encoder_hidden_dims
+            )
+        elif self.model_cfg.x0_encoder is None:
+            pass
+        else:
+            raise ValueError(f"Invalid x0_encoder: {self.model_cfg.x0_encoder}")
+
+        # Timestamp embedding
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        self.blocks = nn.ModuleList(
+            [
+                DiTCrossBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio)
+                for _ in range(depth)
+            ]
+        )
+        
+        # functionally setting patch size to 1 for a point cloud
+        self.final_layer = FinalLayer(hidden_size, 1, self.out_channels)
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Initialize x_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.x_embedder.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.x_embedder.bias, 0)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # Zero-out adaLN modulation layers in DiT blocks:
+        for block in self.blocks:
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        # Zero-out output layers:
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        y: torch.Tensor,
+        x0: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Forward pass of DiT with scene cross attention.
+
+        Args:
+            x (torch.Tensor): (B, D, N) tensor of batched current timestep x (e.g. noised action) features
+            t (torch.Tensor): (B,) tensor of diffusion timesteps
+            y (torch.Tensor): (B, D, N) tensor of un-noised scene (e.g. anchor) features
+            x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
+        """
+        x_emb = self.x_embedder(x)
+
+        if self.model_cfg.x0_encoder is not None:
+            assert x0 is not None, "x0 must be provided if x0_encoder is not None"
+            x0_emb = self.x0_embedder(x0)
+            x_emb = torch.cat((x_emb, x0_emb), dim=1)
+
+        if self.model_cfg.y_encoder is not None:
+            y_emb = self.y_embedder(y)
+            y_emb = y_emb.permute(0, 2, 1)
+
+        x = x_emb.permute(0, 2, 1)
+
+        c = self.t_embedder(t)
+
+        for block in self.blocks:
+            x = block(x, y_emb, c)
+
+        x = self.final_layer(x, c)
+
+        x = x.permute(0, 2, 1)
+
+        return x
 
 
 #################################################################################

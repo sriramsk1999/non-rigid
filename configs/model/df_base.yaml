@@ -1,6 +1,7 @@
 name: df_base
 in_channels: 6
 learn_sigma: True
+type: flow
 dit_arch: DiT_pcu_xS
 diff_train_steps: 100
 diff_inference_steps: 100

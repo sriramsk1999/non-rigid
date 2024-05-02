@@ -37,7 +37,7 @@ class MicrowaveFlowDataset(data.Dataset):
         goal = torch.as_tensor(demo["goal"]).float()
         # return pc_init, flow, seg, t_wc, goal
         return {
-            "pc_init": pc_init,
+            "pc": pc_init,
             "flow": flow,
             "seg": seg,
             "t_wc": t_wc,
@@ -70,7 +70,7 @@ class MultiGeneralFlowDataset(data.Dataset):
         obj_id = torch.as_tensor(int(demo["obj_id"])).int() # Assumes obj_id is an integer e.g. 7273
         # return pc_init, flow, seg, rgb, t_wc, goal, obj_id
         return {
-            "pc_init": pc_init,
+            "pc": pc_init,
             "flow": flow,
             "seg": seg,
             "rgb": rgb,

@@ -25,7 +25,7 @@ import numpy as np
 
 def predict(network, batch, device, diffusion, trials, sample_size):
     # pos, gt_flow, seg, t_wc, goal = batch
-    pos = batch['pc_init']
+    pos = batch['pc']
     gt_flow = batch['flow']
     seg = batch['seg']
     t_wc = batch['t_wc']
@@ -56,7 +56,7 @@ def predict(network, batch, device, diffusion, trials, sample_size):
 
 def predict_wta(network, batch, device, diffusion, num_wta_trials=50, sample_size=1200):
     # pos, gt_flow, seg, _, goal = batch
-    pos = batch['pc_init']
+    pos = batch['pc']
     gt_flow = batch['flow']
     seg = batch['seg']
     goal = batch['goal']
@@ -296,7 +296,7 @@ def main(cfg):
     if visualize_single_prediction:
         animation = FlowNetAnimation()
         # pos, _, _, t_wc, _  = val_dataset[1]
-        pos = torch.tensor(val_dataset[visualize_single_prediction_idx]['pc_init'])
+        pos = torch.tensor(val_dataset[visualize_single_prediction_idx]['pc'])
         t_wc = torch.tensor(val_dataset[visualize_single_prediction_idx]['t_wc'])
 
         pos = pos.unsqueeze(0).cuda().transpose(-1, -2)
