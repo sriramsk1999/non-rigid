@@ -28,8 +28,10 @@ from non_rigid.utils.script_utils import (
     match_fn,
     flatten_outputs
 )
+from non_rigid.utils.transform_utils import flow_to_tf
+from non_rigid.utils.vis_utils import FlowNetAnimation
 
-from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse
+from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse, pcd_rmse
 from non_rigid.models.dit.diffusion import create_diffusion
 from tqdm import tqdm
 import numpy as np
@@ -149,11 +151,12 @@ def main(cfg):
     #     train_dataset = RigidFlowDataset(data_root, "train", dataset_cfg=cfg.dataset)
     #     val_dataset = RigidFlowDataset(data_root, "val", dataset_cfg=cfg.dataset)
 
-    MMD_METRICS = True
-    PRECISION_METRICS = True
+    MMD_METRICS = False
+    PRECISION_METRICS = False
     VISUALIZE_ALL = False
-    VISUALIZE_SINGLE = True
-    VISUALIZE_SINGLE_IDX = 10
+    VISUALIZE_SINGLE = False
+    VISUALIZE_EVAL_SINGLE = True
+    VISUALIZE_SINGLE_IDX = 8
     
     SHOW_FIG = True
     SAVE_FIG = False
@@ -269,12 +272,20 @@ def main(cfg):
 
             viz_batch_idx=0
             fig = go.Figure()
-            fig.add_trace(pointcloud(pc_anchor[0 + viz_batch_idx*num_samples].permute(1, 0).detach().cpu(), downsample=1, scene="scene1", name="Anchor PCD"))
+            fig.add_trace(pointcloud(pc_anchor[0 + viz_batch_idx*num_samples].permute(1, 0).detach().cpu(), downsample=1, scene="scene1", name="Anchor PCD", colors=['gray'] * pc_anchor.shape[1]))
             for i in range(num_samples):
                 fig.add_trace(pointcloud(pred_actions[i + viz_batch_idx*num_samples].detach().cpu(), downsample=1, scene="scene1", name=f"Predicted PCD {i}"))
-            for i in range(val_action.shape[0]):
-                fig.add_trace(pointcloud(val_action[i].detach().cpu(), downsample=1, scene="scene1", name=f"Goal Action PCD {i}"))
-            fig.update_layout(scene1=_3d_scene(pred_actions[0 + viz_batch_idx*num_samples].detach().cpu(), domain_scale=3))
+            # for i in range(val_action.shape[0]):
+            #     fig.add_trace(pointcloud(val_action[i].detach().cpu(), downsample=1, scene="scene1", name=f"Goal Action PCD {i}"))
+            fig.update_layout(
+                scene1=_3d_scene(
+                    torch.cat(
+                        [pred_actions[0 + viz_batch_idx*num_samples].detach().cpu(), pc_anchor[0 + viz_batch_idx*num_samples].permute(1, 0).detach().cpu()],
+                        dim=0
+                    ),
+                    domain_scale=2
+                )
+            )
             if SHOW_FIG:
                 fig.show()
             if SAVE_FIG:
@@ -403,7 +414,6 @@ def main(cfg):
 
 
     # plot single diffusion chain
-    from non_rigid.utils.vis_utils import FlowNetAnimation
     if VISUALIZE_SINGLE:
         model.to(device)
         animation = FlowNetAnimation()
@@ -488,6 +498,107 @@ def main(cfg):
                 fig.show()
             if SAVE_FIG:
                 fig.write_html("pcd.html")
+
+
+    if VISUALIZE_EVAL_SINGLE:
+        model.to(device)
+        animation = FlowNetAnimation()
+        
+        data = datamodule.val_dataset[VISUALIZE_SINGLE_IDX]
+        if cfg.model.type == "point_cross":
+            pos = data["pc"]
+            pc_action = data["pc_action"]
+            pc_anchor = data["pc_anchor"]
+            
+            pc_action = pc_action.unsqueeze(0).permute(0, 2, 1).to(device)
+            pc_anchor = pc_anchor.unsqueeze(0).permute(0, 2, 1).to(device)
+            
+            print(f'PC Action: {pc_action.shape}')
+            print(f'PC Anchor: {pc_anchor.shape}')
+            
+            model_kwargs = dict(
+                y=pc_anchor,
+                x0=pc_action, 
+            )
+            model_kwargs, pred_pos, results = model.predict(1, model_kwargs, 1, False)
+            
+            pred_pos = pred_pos[0].cpu()
+            pos = pos.cpu()
+            pcd = pc_action[0].permute(1, 0).cpu()
+            anchor_pc = pc_anchor[0].permute(1, 0).cpu()
+            
+            start_to_pred_flows = pred_pos - pcd
+            start_to_pred_tf = flow_to_tf(pcd.unsqueeze(0), start_to_pred_flows.unsqueeze(0))
+            
+            eval_pred_pos = start_to_pred_tf.transform_points(pcd.unsqueeze(0)).squeeze(0)
+
+            pred_vs_eval_rmse = pcd_rmse(pred_pos, eval_pred_pos)
+            print(f'Pred vs Eval RMSE: {pred_vs_eval_rmse}')
+
+            fig = go.Figure()
+            fig.add_trace(pointcloud(pos, downsample=1, scene="scene1", name="Goal Action PCD", colors=['green'] * pos.shape[0]))
+            fig.add_trace(pointcloud(anchor_pc, downsample=1, scene="scene1", name="Anchor PCD", colors=['gray'] * anchor_pc.shape[0]))
+            fig.add_trace(pointcloud(pcd, downsample=1, scene="scene1", name="Context Action PCD"))
+            fig.add_trace(pointcloud(pred_pos, downsample=1, scene="scene1", name="Predicted PCD", colors=['blue'] * pred_pos.shape[0]))
+            fig.add_trace(pointcloud(eval_pred_pos, downsample=1, scene="scene1", name="Eval Predicted PCD", colors=['red'] * eval_pred_pos.shape[0]))
+            ft = _flow_traces(pcd, start_to_pred_flows, scene="scene1", flowcolor="red", flowscale=1, name="Start to Pred Flow")
+            fig.add_trace(ft[0])
+            fig.add_trace(ft[1])
+            fig.update_layout(scene1=_3d_scene(torch.cat([pred_pos, pos, anchor_pc], dim=0).detach().cpu()))
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("eval_pcd.html")
+        elif cfg.model.type == "flow_cross":
+            pos = data["pc"]
+            pc_anchor = data["pc_anchor"]
+            pc_action = data["pc_action"]
+            
+            pos = pos.unsqueeze(0).permute(0, 2, 1).to(device)
+            pc_anchor = pc_anchor.unsqueeze(0).permute(0, 2, 1).to(device)
+            pc_action = pc_action.unsqueeze(0).permute(0, 2, 1).to(device)
+            
+            model_kwargs = dict(
+                y=pc_anchor,
+                x0=pos, 
+            )
+            model_kwargs, pred_flow, results = model.predict(1, model_kwargs, 1, False)
+            
+            pred_flow = pred_flow[0].permute(1, 0).cpu()
+            pcd = pos[0].permute(1, 0).cpu()
+            print(pcd.shape, pred_flow.shape)
+            pred_pos = pcd + pred_flow.permute(1, 0)
+            print(pred_pos.shape)
+            pc_action = pc_action[0].permute(1, 0).cpu()
+            pc_anchor = pc_anchor[0].permute(1, 0).cpu()
+            
+            combined_pcd = torch.cat([pc_anchor, pcd], dim=0)
+
+            for noise_step in tqdm(results[0:]):
+                pred_flow_step = noise_step[0].permute(1, 0).cpu()
+                animation.add_trace(
+                    combined_pcd,
+                    [pcd],
+                    [pred_flow_step],#combined_flow,
+                    "red",
+                )
+
+            fig = animation.animate()
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("eval_animation.html")
+            
+            fig = go.Figure()
+            fig.add_trace(pointcloud(pc_action, downsample=1, scene="scene1", name="Goal Action PCD"))
+            fig.add_trace(pointcloud(pc_anchor, downsample=1, scene="scene1", name="Anchor PCD"))
+            fig.add_trace(pointcloud(pcd, downsample=1, scene="scene1", name="Starting Action PCD"))
+            fig.add_trace(pointcloud(pred_pos, downsample=1, scene="scene1", name="Final Predicted PCD"))
+            fig.update_layout(scene1=_3d_scene(torch.cat([pred_pos.cpu(), pcd.cpu(), pc_anchor.cpu()], dim=0).detach().cpu()))
+            if SHOW_FIG:
+                fig.show()
+            if SAVE_FIG:
+                fig.write_html("eval_pcd.html")
 
 
 if __name__ == "__main__":

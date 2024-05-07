@@ -481,7 +481,7 @@ class PointPredictionTrainingModule(L.LightningModule):
 
     def forward(self, batch, t, mode="train"):
         # Extract point clouds from batch
-        
+                
         pos = batch["pc"].permute(0, 2, 1)  # B, C, N
         pc_action = batch["pc_action"].permute(0, 2, 1)  # B, C, N
         pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # B, C, N
