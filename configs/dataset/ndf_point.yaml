@@ -1,5 +1,6 @@
 name: ndf_point
 data_dir: /home/triind/workspace/rpad/data/equivariant_pose_graph/data/mug_place_reduced
+# data_dir: /home/triind/workspace/rpad/data/rpdiff/data/overfit_1r_1m_1d
 type: ndf_point
 
 ###################################################
@@ -17,7 +18,7 @@ sample_size: 512 # Number of points to downsample to
 downsample_type: fps # [fps, random], downsampling method
 pcd_scale_factor: 15.0 # Scale factor for the point clouds
 action_transform_type: quat_uniform # Transformation type to apply to demonstrations
-anchor_transform_type: quat_uniform # Transformation type to apply to demonstrations
+anchor_transform_type: random_flat_upright # Transformation type to apply to demonstrations
 translation_variance: 0.0 # Translation variance of the demo transformation
 rotation_variance: 180 # Rotation variance of the demo transformation
 

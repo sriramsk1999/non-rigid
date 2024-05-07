@@ -209,3 +209,67 @@ def create_axis(length=1.0, num_points=100):
     pts = np.concatenate([x_axis, y_axis, z_axis], axis=0)
 
     return pts
+
+
+def toDisplay(x, target_dim = None):
+    while(target_dim is not None and x.dim() > target_dim):
+        x = x[0]
+    return x.detach().cpu().numpy()
+
+
+def plot_multi_np(plist):
+    """
+    Args: plist, list of numpy arrays of shape, (1,num_points,3)
+    """
+    colors = [
+        '#1f77b4',  # muted blue
+        '#ff7f0e',  # safety orange
+        '#2ca02c',  # cooked asparagus green
+        '#d62728',  # brick red
+        '#9467bd',  # muted purple
+        '#e377c2',  # raspberry yogurt pink
+        '#8c564b',  # chestnut brown
+        '#7f7f7f',  # middle gray
+        '#bcbd22',  # curry yellow-green
+        '#17becf',  # blue-teal
+        '#1f77b4',  # muted blue
+        '#ff7f0e',  # safety orange
+        '#2ca02c',  # cooked asparagus green
+        '#d62728',  # brick red
+        '#9467bd',  # muted purple
+        '#e377c2',  # raspberry yogurt pink
+        '#8c564b',  # chestnut brown
+        '#7f7f7f',  # middle gray
+        '#bcbd22',  # curry yellow-green
+        '#17becf',  # blue-teal
+        '#1f77b4',  # muted blue
+        '#ff7f0e',  # safety orange
+        '#2ca02c',  # cooked asparagus green
+        '#d62728',  # brick red
+        '#9467bd',  # muted purple
+        '#e377c2',  # raspberry yogurt pink
+        '#8c564b',  # chestnut brown
+        '#7f7f7f',  # middle gray
+        '#bcbd22',  # curry yellow-green
+        '#17becf',  # blue-teal
+    ]
+    skip = 1
+    go_data = []
+    for i in range(len(plist)):
+        p_dp = toDisplay(torch.from_numpy(plist[i]))
+        plot = go.Scatter3d(x=p_dp[::skip,0], y=p_dp[::skip,1], z=p_dp[::skip,2], 
+                     mode='markers', marker=dict(size=2, color=colors[i],
+                     symbol='circle'))
+        go_data.append(plot)
+ 
+    layout = go.Layout(
+        scene=dict(
+            aspectmode='data',
+        ),
+        height=800,
+        width=800,
+    )
+
+    fig = go.Figure(data=go_data, layout=layout)
+    fig.show()
+    return fig

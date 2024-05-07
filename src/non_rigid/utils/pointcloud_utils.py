@@ -138,7 +138,7 @@ def get_nonintersecting_anchor(
             - "quat_uniform": Uniform SE(3) sampling
             - "random_flat_upright": Random rotation around z axis and xy translation (no z translation)
             - "random_upright": Random rotation around z axis and xyz translation
-            
+
     Returns:
         (torch.Tensor): [B, N, 3] Non-intersecting anchor point cloud.
         (Transform3d): Transformation applied to the base point cloud to get the non-intersecting anchor.
@@ -225,7 +225,7 @@ def get_multi_anchor_scene(
             - "random_flat_upright": Random rotation around z axis and xy translation (no z translation)
             - "random_upright": Random rotation around z axis and xyz translation
         num_anchors_to_add (int): Number of anchors to add.
-        
+
     Returns:
         (torch.Tensor): [B, N, 3] Gripper point cloud.
         (torch.Tensor): [B, N, 3] Action point cloud.

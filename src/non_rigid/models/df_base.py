@@ -22,9 +22,9 @@ from non_rigid.models.dit.models import (
     DiT_PointCloud_Unc_Cross,
 )
 from non_rigid.models.dit.diffusion import create_diffusion
+from non_rigid.metrics.error_metrics import get_pred_pcd_rigid_errors
 from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse, pc_nn
 from non_rigid.utils.logging_utils import viz_predicted_vs_gt
-from non_rigid.utils.vis_utils import get_color
 
 from diffusers import get_cosine_schedule_with_warmup
 
@@ -562,7 +562,7 @@ class PointPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_actions_wta = pred_action[torch.arange(bs), winner]
-        return pred_actions_wta, cos_sim_wta, rmse_wta
+        return pred_actions_wta, pred_action, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(
@@ -586,11 +586,13 @@ class PointPredictionTrainingModule(L.LightningModule):
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
         with torch.no_grad():
-            pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+            pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
                 batch, mode="val"
             )
 
+        #########################################################
         # Logging
+        #########################################################
         self.log_dict(
             {
                 f"val_wta/cos_sim": cos_sim_wta.mean(),
@@ -599,6 +601,31 @@ class PointPredictionTrainingModule(L.LightningModule):
             add_dataloader_idx=False,
             prog_bar=True,
         )
+
+        # Get prediction error
+        start_xyz = batch["pc_action"]
+        pred_xyz = pred_actions[:, 0, ...] # Take first sample of every batch
+        T_action2goal = batch["T_action2goal"]
+        T_action2distractor_list = batch["T_action2distractor_list"] if "T_action2distractor_list" in batch else None
+        errors = get_pred_pcd_rigid_errors(
+            start_xyz=start_xyz,
+            pred_xyz=pred_xyz,
+            T_gt=T_action2goal,
+            T_action2distractor_list=T_action2distractor_list,
+            error_type=self.training_cfg.prediction_error_type,
+        )
+        self.log_dict(
+            {
+                'val/error_t_mean': errors["error_t_mean"],
+                'val/error_R_mean': errors["error_R_mean"],
+            },
+            add_dataloader_idx=False,
+            prog_bar=True,
+        )
+
+        #########################################################
+        # Visualization
+        #########################################################
 
         # Choose random example to visualize
         viz_idx = np.random.randint(0, batch["pc"].shape[0])
@@ -624,7 +651,7 @@ class PointPredictionTrainingModule(L.LightningModule):
         
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+        pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
             batch, mode="val"
         )
         return {

@@ -372,13 +372,13 @@ def main(cfg):
         
         # visualizing predictions
         for batch in tqdm(datamodule.val_dataloader()):
-            pred_actions, _, _ = model.predict_wta(batch, "val")
+            pred_actions_wta, pred_actions, _, _ = model.predict_wta(batch, "val")
             
             if cfg.model.type == "point_cross":
-                pred_pc = pred_actions.detach().cpu()
+                pred_pc = pred_actions_wta.detach().cpu()
                 gt_pc = batch["pc"]
             elif cfg.model.type == "flow_cross":
-                pred_pc = batch["pc"] + pred_actions.detach().cpu()
+                pred_pc = batch["pc"] + pred_actions_wta.detach().cpu()
                 gt_pc = batch["pc_action"]
 
             gt_pc_t = gt_pc.flatten(end_dim=-2).cpu().numpy()

@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from functools import lru_cache
+import lightning as L
 import numpy as np
+import omegaconf
 import os
 from pathlib import Path
-import lightning as L
-import omegaconf
+from pytorch3d.transforms import Transform3d, Translate
 import torch
 import torch.utils.data as data
 from typing import Dict
@@ -18,7 +19,7 @@ class RigidDatasetCfg:
     name: str = "rigid"
     data_dir: str = "data/rigid"
     type: str = "train"
-    
+
     ###################################################
     # General Dataset Parameters
     ###################################################
@@ -28,7 +29,7 @@ class RigidDatasetCfg:
     train_dataset_size: int = 256
     # Length of the validation dataset
     val_dataset_size: int = 16
-    
+
     ###################################################
     # Point cloud augmentation parameters
     ###################################################
@@ -46,7 +47,7 @@ class RigidDatasetCfg:
     # Translation and rotation variance for the action and anchor transformations
     translation_variance: float = 0.5
     rotation_variance: float = 180
-    
+
     ###################################################
     # Distractor anchor point cloud parameters
     ###################################################
@@ -57,7 +58,8 @@ class RigidDatasetCfg:
     # Translation and rotation variance for the distractor transformations
     distractor_translation_variance: float = 0.5
     distractor_rotation_variance: float = 180
-    
+
+
 class RigidPointDataset(data.Dataset):
     def __init__(
         self,
@@ -70,7 +72,7 @@ class RigidPointDataset(data.Dataset):
         self.root = root
         self.type = type
         self.dataset_cfg = dataset_cfg
-        
+
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
@@ -128,11 +130,11 @@ class RigidPointDataset(data.Dataset):
         )
         points_action = points_action.squeeze(0)
         points_anchor = points_anchor.squeeze(0)
-        
+
         # Apply scale factor
         points_action *= self.dataset_cfg.pcd_scale_factor
         points_anchor *= self.dataset_cfg.pcd_scale_factor
-        
+
         # Transform the point clouds
         # ransform the point clouds
         T0 = random_se3(
@@ -147,24 +149,27 @@ class RigidPointDataset(data.Dataset):
             trans_var=self.dataset_cfg.translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
-        
+
         goal_points_action = T1.transform_points(points_action)
         goal_points_anchor = T1.transform_points(points_anchor)
-        
+
         # Get starting action point cloud
         # Transform the action point cloud
-        points_action = goal_points_action - goal_points_action.mean(dim=0)
+        goal_points_action_mean = goal_points_action.mean(dim=0)
+        points_action = goal_points_action - goal_points_action_mean
         points_action = T0.transform_points(points_action)
-        
-        # Center the action point cloud
-        points_action = points_action - points_action.mean(dim=0)
-        
+
+        T_action2goal = T0.inverse().compose(
+            Translate(goal_points_action_mean.unsqueeze(0))
+        )
+
         return {
-            "pc": goal_points_action, # Action points in goal position
-            "pc_anchor": goal_points_anchor, # Anchor points in goal position
-            "pc_action": points_action, # Action points for context
+            "pc": goal_points_action,  # Action points in goal position
+            "pc_anchor": goal_points_anchor,  # Anchor points in goal position
+            "pc_action": points_action,  # Action points for context
             "T0": T0.get_matrix().squeeze(0).T,
             "T1": T1.get_matrix().squeeze(0).T,
+            "T_action2goal": T_action2goal.get_matrix().squeeze(0).T,
         }
 
 
@@ -180,7 +185,7 @@ class RigidFlowDataset(data.Dataset):
         self.root = root
         self.type = type
         self.dataset_cfg = dataset_cfg
-        
+
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
@@ -238,11 +243,11 @@ class RigidFlowDataset(data.Dataset):
         )
         goal_points_action = goal_points_action.squeeze(0)
         goal_points_anchor = goal_points_anchor.squeeze(0)
-        
+
         # Apply scale factor
         goal_points_action *= self.dataset_cfg.pcd_scale_factor
         goal_points_anchor *= self.dataset_cfg.pcd_scale_factor
-        
+
         # Transform the point clouds
         T0 = random_se3(
             N=1,
@@ -256,25 +261,25 @@ class RigidFlowDataset(data.Dataset):
             trans_var=self.dataset_cfg.translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
-        
+
         goal_points_action = T1.transform_points(goal_points_action)
         goal_points_anchor = T1.transform_points(goal_points_anchor)
-        
+
         # Get starting action point cloud
         # Transform the action point cloud
         points_action = goal_points_action.clone() - goal_points_action.mean(dim=0)
         points_action = T0.transform_points(points_action)
-        
+
         # Center the action point cloud
         points_action = points_action - points_action.mean(dim=0)
-        
+
         # Calculate goal flow
         flow = goal_points_action - points_action
-        
+
         return {
-            "pc": points_action, # Action points in starting position
-            "pc_anchor": goal_points_anchor, # Anchor points in goal position
-            "pc_action": goal_points_action, # Action points in goal position
+            "pc": points_action,  # Action points in starting position
+            "pc_anchor": goal_points_anchor,  # Anchor points in goal position
+            "pc_action": goal_points_action,  # Action points in goal position
             "flow": flow,
             "T0": T0.get_matrix().squeeze(0).T,
             "T1": T1.get_matrix().squeeze(0).T,
@@ -293,9 +298,9 @@ class NDFPointDataset(data.Dataset):
         self.root = root
         self.type = type
         self.dataset_cfg = dataset_cfg
-        
+
         dir_type = self.type if self.type == "train" else "test"
-        self.dataset_dir = self.root / f'{dir_type}_data/renders'
+        self.dataset_dir = self.root / f"{dir_type}_data/renders"
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
         if self.dataset_cfg.num_demos is not None and self.type == "train":
@@ -310,7 +315,7 @@ class NDFPointDataset(data.Dataset):
             return self.dataset_cfg.val_dataset_size
         else:
             raise ValueError(f"Unknown dataset type: {self.type}")
-        
+
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         demo = np.load(self.demo_files[index % self.num_demos])
 
@@ -325,9 +330,20 @@ class NDFPointDataset(data.Dataset):
         points_action = torch.as_tensor(points_action).float()
         points_anchor = torch.as_tensor(points_anchor).float()
 
+        # Apply scale factor
+        points_action *= self.dataset_cfg.pcd_scale_factor
+        points_anchor *= self.dataset_cfg.pcd_scale_factor
+
         # Add distractor anchor point clouds
         if self.dataset_cfg.distractor_anchor_pcds > 0:
-            _, points_action, points_anchor_base, distractor_anchor_pcd_list, T_distractor_list, debug = get_multi_anchor_scene(
+            (
+                _,
+                points_action,
+                points_anchor_base,
+                distractor_anchor_pcd_list,
+                T_distractor_list,
+                debug,
+            ) = get_multi_anchor_scene(
                 points_gripper=None,
                 points_action=points_action.unsqueeze(0),
                 points_anchor_base=points_anchor.unsqueeze(0),
@@ -336,9 +352,11 @@ class NDFPointDataset(data.Dataset):
                 rot_sample_method=self.dataset_cfg.distractor_transform_type,
                 num_anchors_to_add=self.dataset_cfg.distractor_anchor_pcds,
             )
-            points_anchor = torch.cat([points_anchor_base] + distractor_anchor_pcd_list, dim=1).squeeze(0)
+            points_anchor = torch.cat(
+                [points_anchor_base] + distractor_anchor_pcd_list, dim=1
+            ).squeeze(0)
             points_action = points_action.squeeze(0)
-            
+
         # Center the point clouds
         if self.dataset_cfg.center_type == "action_center":
             center = points_action.mean(axis=0)
@@ -353,7 +371,6 @@ class NDFPointDataset(data.Dataset):
         points_action -= center
         points_anchor -= center
 
-
         # Downsample the point clouds
         points_action, _ = downsample_pcd(
             points_action.unsqueeze(0),
@@ -367,11 +384,7 @@ class NDFPointDataset(data.Dataset):
         )
         points_action = points_action.squeeze(0)
         points_anchor = points_anchor.squeeze(0)
-        
-        # Apply scale factor
-        points_action *= self.dataset_cfg.pcd_scale_factor
-        points_anchor *= self.dataset_cfg.pcd_scale_factor
-        
+
         # Transform the point clouds
         # ransform the point clouds
         T0 = random_se3(
@@ -386,25 +399,58 @@ class NDFPointDataset(data.Dataset):
             trans_var=self.dataset_cfg.translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
-        
+
         goal_points_action = T1.transform_points(points_action)
         goal_points_anchor = T1.transform_points(points_anchor)
-        
+
         # Get starting action point cloud
         # Transform the action point cloud
-        points_action = goal_points_action - goal_points_action.mean(dim=0)
+        goal_points_action_mean = goal_points_action.mean(dim=0)
+        points_action = goal_points_action - goal_points_action_mean
         points_action = T0.transform_points(points_action)
-        
-        # Center the action point cloud
-        points_action = points_action - points_action.mean(dim=0)
-        
-        return {
-            "pc": goal_points_action, # Action points in goal position
-            "pc_anchor": goal_points_anchor, # Anchor points in goal position
-            "pc_action": points_action, # Action points for context
+
+        # # Get the points action to goal points action transformation
+        # print(f'goal_points_action_mean: {goal_points_action_mean}')
+        # from non_rigid.utils.vis_utils import plot_multi_np
+
+        T_action2goal = T0.inverse().compose(
+            Translate(goal_points_action_mean.unsqueeze(0))
+        )
+        # action2goal = T_action2goal.transform_points(points_action)
+
+        T_aug_action2goal_list = []
+        for T_distractor in T_distractor_list:
+            T_aug_action2goal = T_action2goal.compose(
+                T1.inverse()
+                .compose(Translate(center.unsqueeze(0)))
+                .compose(T_distractor)
+                .compose(Translate(-center.unsqueeze(0)))
+                .compose(T1)
+            )
+            T_aug_action2goal_list.append(T_aug_action2goal)
+        # aug_action2goal = T_aug_action2goal_list[0].transform_points(points_action)
+
+        # plot_multi_np([goal_points_action.numpy(), action2goal.numpy(), goal_points_anchor.numpy(), aug_action2goal.numpy()])
+        # breakpoint()
+
+        data = {
+            "pc": goal_points_action,  # Action points in goal position
+            "pc_anchor": goal_points_anchor,  # Anchor points in goal position
+            "pc_action": points_action,  # Action points for context
             "T0": T0.get_matrix().squeeze(0).T,
             "T1": T1.get_matrix().squeeze(0).T,
+            "T_action2goal": T_action2goal.get_matrix().squeeze(0).T,
         }
+
+        if self.dataset_cfg.distractor_anchor_pcds > 0:
+            data["T_distractor_list"] = torch.stack(
+                [T.get_matrix().squeeze(0).T for T in T_distractor_list]
+            )
+            data["T_action2distractor_list"] = torch.stack(
+                [T.get_matrix().squeeze(0).T for T in T_aug_action2goal_list]
+            )
+
+        return data
 
 
 DATASET_FN = {
