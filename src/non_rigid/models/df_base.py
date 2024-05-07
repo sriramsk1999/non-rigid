@@ -23,6 +23,7 @@ from non_rigid.models.dit.models import (
 )
 from non_rigid.models.dit.diffusion import create_diffusion
 from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse, pc_nn
+from non_rigid.utils.logging_utils import viz_predicted_vs_gt
 from non_rigid.utils.vis_utils import get_color
 
 from diffusers import get_cosine_schedule_with_warmup
@@ -258,57 +259,23 @@ class FlowPredictionTrainingModule(L.LightningModule):
         )
             
         if self.model_cfg.type == "flow_cross":
-            # Visualize predicted vs ground truth
+            # Choose random example to visualize
             viz_idx = np.random.randint(0, batch["pc"].shape[0])
-            
+
             pc_pos_viz = batch["pc"][viz_idx, :, :3]
             pc_action_viz = batch["pc_action"][viz_idx, :, :3]
             pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
-            
             pred_flows_viz = pred_flows_wta[viz_idx, :, :3]
             pred_action_wta_viz = pc_pos_viz + pred_flows_viz
             
-            pc_comb_viz = torch.cat([pc_action_viz, pc_anchor_viz], dim=0)
-            pc_comb_viz_min = pc_comb_viz.min(dim=0).values
-            pc_comb_viz_max = pc_comb_viz.max(dim=0).values
-            pc_comb_viz_extent = pc_comb_viz_max - pc_comb_viz_min
-            pred_action_wta_viz = pred_action_wta_viz[
-                (
-                    pred_action_wta_viz[:, 0]
-                    > pc_comb_viz_min[0] - 0.5 * pc_comb_viz_extent[0]
-                )
-                & (
-                    pred_action_wta_viz[:, 0]
-                    < pc_comb_viz_max[0] + 0.5 * pc_comb_viz_extent[0]
-                )
-                & (
-                    pred_action_wta_viz[:, 1]
-                    > pc_comb_viz_min[1] - 0.5 * pc_comb_viz_extent[1]
-                )
-                & (
-                    pred_action_wta_viz[:, 1]
-                    < pc_comb_viz_max[1] + 0.5 * pc_comb_viz_extent[1]
-                )
-                & (
-                    pred_action_wta_viz[:, 2]
-                    > pc_comb_viz_min[2] - 0.5 * pc_comb_viz_extent[2]
-                )
-                & (
-                    pred_action_wta_viz[:, 2]
-                    < pc_comb_viz_max[2] + 0.5 * pc_comb_viz_extent[2]
-                )
-            ]
-            predicted_vs_gt_wta_tensors = [
-                pc_action_viz,
-                pc_anchor_viz,
-                pred_action_wta_viz,
-            ]
-            predicted_vs_gt_wta_colors = ["green", "red", "blue"]
-            predicted_vs_gt_wta = get_color(
-                tensor_list=predicted_vs_gt_wta_tensors,
-                color_list=predicted_vs_gt_wta_colors,
+            # Get predicted vs. ground truth visualization            
+            predicted_vs_gt_wta = viz_predicted_vs_gt(
+                pc_pos_viz=pc_pos_viz,
+                pc_action_viz=pc_action_viz,
+                pc_anchor_viz=pc_anchor_viz,
+                pred_action_viz=pred_action_wta_viz,
             )
-            wandb.log({"val_wta/predicted_vs_gt": wandb.Object3D(predicted_vs_gt_wta)})
+            wandb.log({"val_wta/predicted_vs_gt": predicted_vs_gt_wta})
             
         return {
             "loss": rmse_wta,
@@ -633,55 +600,22 @@ class PointPredictionTrainingModule(L.LightningModule):
             prog_bar=True,
         )
 
-        # Visualize predicted vs ground truth
+        # Choose random example to visualize
         viz_idx = np.random.randint(0, batch["pc"].shape[0])
 
         pc_pos_viz = batch["pc"][viz_idx, :, :3]
         pc_action_viz = batch["pc_action"][viz_idx, :, :3]
         pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
-
-        pc_comb_viz = torch.cat([pc_action_viz, pc_anchor_viz], dim=0)
-        pc_comb_viz_min = pc_comb_viz.min(dim=0).values
-        pc_comb_viz_max = pc_comb_viz.max(dim=0).values
-        pc_comb_viz_extent = pc_comb_viz_max - pc_comb_viz_min
-        pred_action_wta_viz = pred_actions_wta[viz_idx, :, :3]
-        pred_action_wta_viz = pred_action_wta_viz[
-            (
-                pred_action_wta_viz[:, 0]
-                > pc_comb_viz_min[0] - 0.5 * pc_comb_viz_extent[0]
-            )
-            & (
-                pred_action_wta_viz[:, 0]
-                < pc_comb_viz_max[0] + 0.5 * pc_comb_viz_extent[0]
-            )
-            & (
-                pred_action_wta_viz[:, 1]
-                > pc_comb_viz_min[1] - 0.5 * pc_comb_viz_extent[1]
-            )
-            & (
-                pred_action_wta_viz[:, 1]
-                < pc_comb_viz_max[1] + 0.5 * pc_comb_viz_extent[1]
-            )
-            & (
-                pred_action_wta_viz[:, 2]
-                > pc_comb_viz_min[2] - 0.5 * pc_comb_viz_extent[2]
-            )
-            & (
-                pred_action_wta_viz[:, 2]
-                < pc_comb_viz_max[2] + 0.5 * pc_comb_viz_extent[2]
-            )
-        ]
-        predicted_vs_gt_wta_tensors = [
-            pc_pos_viz,
-            pc_anchor_viz,
-            pred_action_wta_viz,
-        ]
-        predicted_vs_gt_wta_colors = ["green", "red", "blue"]
-        predicted_vs_gt_wta = get_color(
-            tensor_list=predicted_vs_gt_wta_tensors,
-            color_list=predicted_vs_gt_wta_colors,
+        pred_action_viz = pred_actions_wta[viz_idx, :, :3]
+        
+        # Get predicted vs. ground truth visualization
+        predicted_vs_gt_wta_viz = viz_predicted_vs_gt(
+            pc_pos_viz=pc_pos_viz,
+            pc_action_viz=pc_action_viz,
+            pc_anchor_viz=pc_anchor_viz,
+            pred_action_viz=pred_action_viz,
         )
-        wandb.log({"val_wta/predicted_vs_gt": wandb.Object3D(predicted_vs_gt_wta)})
+        wandb.log({"val_wta/predicted_vs_gt": predicted_vs_gt_wta_viz})
 
         return {
             "loss": rmse_wta,
