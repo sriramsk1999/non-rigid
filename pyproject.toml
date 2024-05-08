@@ -7,13 +7,14 @@ requires-python = ">=3.6"
 license = { file = "LICENSE.txt" }
 authors = [{ email = "baeisner@andrew.cmu.edu", name = "Ben Eisner" }]
 dependencies = [
+  "diffusers == 0.27.2",
+  "gif",
   "hydra-core == 1.3.2",
   "lightning == 2.0.3",
   "omegaconf == 2.3.0",
   "pandas",
-  "torch == 2.0.1",        # CUDA 11.8
+  "timm == 0.9.16",
   "torchmetrics",
-  "torchvision == 0.15.2", # CUDA 11.8
   "wandb == 0.15.4",
 ]
 

@@ -63,8 +63,10 @@ def main(cfg):
         dm = MicrowaveFlowDataModule
     elif cfg.dataset.type == "cloth":
         dm = ProcClothFlowDataModule
-    elif cfg.dataset.type in ["rigid_point", "rigid_flow"]:
+    elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point"]:
         dm = partial(RigidDataModule, dataset_cfg=cfg.dataset) # TODO: Pass dataset cfg to all so we can remove partial
+    else: 
+        raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
     
     datamodule = dm(
         root=data_root,
@@ -73,7 +75,7 @@ def main(cfg):
         num_workers=cfg.resources.num_workers,
         dataset_cfg=cfg.dataset,
     )
-
+    
     ######################################################################
     # Create the network(s) which will be trained by the Training Module.
     # The network should (ideally) be lightning-independent. This allows
