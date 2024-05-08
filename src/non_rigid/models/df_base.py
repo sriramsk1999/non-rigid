@@ -78,7 +78,8 @@ class FlowPredictionTrainingModule(L.LightningModule):
         # TODO: organize these params by description
         self.batch_size = training_cfg.batch_size
         self.val_batch_size = training_cfg.val_batch_size
-        self.sample_size = training_cfg.training_sample_size
+        self.sample_size = training_cfg.sample_size
+        self.sample_size_anchor = training_cfg.sample_size_anchor
         self.diff_train_steps = model_cfg.diff_train_steps
         self.num_wta_trials = training_cfg.num_wta_trials
         self.diffusion = create_diffusion(
@@ -120,7 +121,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
     # 'predict' should only be called for inference/evaluation
     @torch.no_grad()
-    def predict(self, bs, model_kwargs, num_samples, unflatten=False):
+    def predict(self, bs, model_kwargs, num_samples, unflatten=False, progress=True):
         """
         unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return
             with shape (batch_size * num_samples, ...)
@@ -133,7 +134,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
             z,
             clip_denoised=False,
             model_kwargs=model_kwargs,
-            progress=True,
+            progress=progress,
             device=self.device,
         )
         pred_flow = pred_flow.permute(0, 2, 1)
@@ -178,8 +179,9 @@ class FlowPredictionTrainingModule(L.LightningModule):
             pos = batch["pc"].to(self.device)
             pc_anchor = batch["pc_anchor"].to(self.device)
             gt_flow = batch["flow"].to(self.device)
-            seg = None # TODO Rigid dataset doesnt have this
-            mask = False
+            # seg = None # TODO Rigid dataset doesnt have this
+            seg = batch["seg"].to(self.device)
+            mask = True
             
             # reshaping and expanding for winner-take-all
             bs = pos.shape[0]
@@ -194,11 +196,16 @@ class FlowPredictionTrainingModule(L.LightningModule):
                 .expand(-1, self.num_wta_trials, -1, -1)
                 .reshape(bs * self.num_wta_trials, -1, self.sample_size)
             )
+            seg = (
+                seg.unsqueeze(1)
+                .expand(-1, self.num_wta_trials, -1)
+                .reshape(bs * self.num_wta_trials, -1)
+            )
             pc_anchor = (
                 pc_anchor.transpose(-1, -2)
                 .unsqueeze(1)
                 .expand(-1, self.num_wta_trials, -1, -1)
-                .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+                .reshape(bs * self.num_wta_trials, -1, self.sample_size_anchor)
             )
             
             model_kwargs = dict(
@@ -212,7 +219,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
         cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
             bs, self.num_wta_trials
         )
-        rmse = flow_rmse(pred_flow, gt_flow, mask=False, seg=None).reshape(
+        rmse = flow_rmse(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
             bs, self.num_wta_trials
         )
         pred_flow = pred_flow.reshape(bs, self.num_wta_trials, -1, 3)
@@ -247,17 +254,66 @@ class FlowPredictionTrainingModule(L.LightningModule):
         with torch.no_grad():
             pred_flows_wta, cos_sim_wta, rmse_wta = self.predict_wta(
                 batch, mode="val"
-            )
-            
+            ) 
         self.log_dict(
             {
-                f"val_wta/cos_sim": cos_sim_wta.mean(),
-                f"val_wta/rmse": rmse_wta.mean(),
+                f"val_wta_cos_sim_{dataloader_idx}": cos_sim_wta.mean(),
+                f"val_wta_rmse_{dataloader_idx}": rmse_wta.mean(),
             },
             add_dataloader_idx=False,
             prog_bar=True,
         )
-            
+        
+        # visualizing predicted vs ground truth
+        if self.model_cfg.type == "flow":
+            viz_idx = np.random.randint(0, batch["pc"].shape[0])
+
+            pc_pos_viz = batch["pc"][viz_idx, :, :3]
+            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+
+            pred_flows_viz = pred_flows_wta[viz_idx, :, :3]
+            pred_action_wta_viz = pc_pos_viz + pred_flows_viz
+
+            pc_viz_min = pc_action_viz.min(dim=0).values
+            pc_viz_max = pc_action_viz.max(dim=0).values
+            pc_viz_extent = pc_viz_max - pc_viz_min
+            pred_action_wta_viz = pred_action_wta_viz[
+                (
+                    pred_action_wta_viz[:, 0]
+                    > pc_viz_min[0] - 0.5 * pc_viz_extent[0]
+                )
+                & (
+                    pred_action_wta_viz[:, 0]
+                    < pc_viz_max[0] + 0.5 * pc_viz_extent[0]
+                )
+                & (
+                    pred_action_wta_viz[:, 1]
+                    > pc_viz_min[1] - 0.5 * pc_viz_extent[1]
+                )
+                & (
+                    pred_action_wta_viz[:, 1]
+                    < pc_viz_max[1] + 0.5 * pc_viz_extent[1]
+                )
+                & (
+                    pred_action_wta_viz[:, 2]
+                    > pc_viz_min[2] - 0.5 * pc_viz_extent[2]
+                )
+                & (
+                    pred_action_wta_viz[:, 2]
+                    < pc_viz_max[2] + 0.5 * pc_viz_extent[2]
+                )
+            ]
+            predicted_vs_gt_wta_tensors = [
+                pc_action_viz,
+                pred_action_wta_viz,
+            ]
+            predicted_vs_gt_wta_colors = ["green", "blue"]
+            predicted_vs_gt_wta = get_color(
+                tensor_list=predicted_vs_gt_wta_tensors,
+                color_list=predicted_vs_gt_wta_colors,
+            )
+            wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": wandb.Object3D(predicted_vs_gt_wta)})
+
         if self.model_cfg.type == "flow_cross":
             # Choose random example to visualize
             viz_idx = np.random.randint(0, batch["pc"].shape[0])
@@ -275,7 +331,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
                 pc_anchor_viz=pc_anchor_viz,
                 pred_action_viz=pred_action_wta_viz,
             )
-            wandb.log({"val_wta/predicted_vs_gt": predicted_vs_gt_wta})
+            wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": wandb.Object3D(predicted_vs_gt_wta)})
             
         return {
             "loss": rmse_wta,

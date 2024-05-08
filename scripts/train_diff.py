@@ -73,8 +73,7 @@ def main(cfg):
         batch_size=cfg.training.batch_size,
         val_batch_size=cfg.training.val_batch_size,
         num_workers=cfg.resources.num_workers,
-        type=cfg.dataset.type,
-        # **cfg.dataset.type_args,
+        dataset_cfg=cfg.dataset,
     )
     
     ######################################################################
@@ -112,8 +111,17 @@ def main(cfg):
     datamodule.setup(stage="train")
     cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
     # updating the training sample size
-    cfg.training.training_sample_size = cfg.dataset.sample_size
+    # cfg.training.training_sample_size = cfg.dataset.sample_size
+
+    if "type_args" in cfg.dataset and cfg.dataset.type_args.scene:
+        if cfg.model.type != "flow":
+            raise ValueError("Scene-based training cannot be used with cross-type models.")
+        cfg.training.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
+    else:
+        cfg.training.sample_size = cfg.dataset.sample_size_action
+        cfg.training.sample_size_anchor = cfg.dataset.sample_size_anchor
     
+
     if cfg.model.type in ["flow", "flow_cross"]:
         model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
     elif cfg.model.type in ["point_cross"]:
@@ -121,7 +129,7 @@ def main(cfg):
     
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)
-    
+
     ######################################################################
     # Set up logging in WandB.
     # This is a bit complicated, because we want to log the codebase,
@@ -187,6 +195,14 @@ def main(cfg):
                 save_weights_only=False,
                 save_last=True,
             ),
+            ModelCheckpoint(
+                dirpath=cfg.lightning.checkpoint_dir,
+                filename="{epoch}-{step}-{val_wta_rmse_0:.3f}",
+                monitor="val_wta_rmse_0",
+                mode="min",
+                save_weights_only=False,
+                save_last=False,
+            )
             # This checkpoint will get saved to WandB. The Callback mechanism in lightning is poorly designed, so we have to put it last.
             # ModelCheckpoint(
             #     dirpath=cfg.lightning.checkpoint_dir,

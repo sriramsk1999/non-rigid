@@ -132,7 +132,8 @@ class CrossAttention(nn.Module):
 
     def forward(self, x, y):
         B, N, Cx = x.shape
-        _, _, Cy = y.shape
+        # _, _, Cy = y.shape
+        _, Ny, Cy = y.shape
         q = (
             self.wq(x)
             .reshape(B, N, self.num_heads, Cx // self.num_heads)
@@ -140,12 +141,12 @@ class CrossAttention(nn.Module):
         )
         k = (
             self.wk(y)
-            .reshape(B, N, self.num_heads, Cx // self.num_heads)
+            .reshape(B, Ny, self.num_heads, Cx // self.num_heads)
             .transpose(1, 2)
         )
         v = (
             self.wv(y)
-            .reshape(B, N, self.num_heads, Cx // self.num_heads)
+            .reshape(B, Ny, self.num_heads, Cx // self.num_heads)
             .transpose(1, 2)
         )
 
