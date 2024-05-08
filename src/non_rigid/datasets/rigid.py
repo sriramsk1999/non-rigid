@@ -61,7 +61,7 @@ class RigidDatasetCfg:
     # Translation and rotation variance for the distractor transformations
     distractor_translation_variance: float = 0.5
     distractor_rotation_variance: float = 180
-    
+
     ###################################################
     # Data Augmentation Parameters
     ###################################################
@@ -320,7 +320,7 @@ class NDFPointDataset(data.Dataset):
 
         dir_type = self.type if self.type == "train" else "test"
         self.dataset_dir = self.root / f"{dir_type}_data/renders"
-        print(f'Loading NDF dataset from {self.dataset_dir}')
+        print(f"Loading NDF dataset from {self.dataset_dir}")
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
         self.num_demos = len(self.demo_files)
         if self.dataset_cfg.num_demos is not None and self.type == "train":
@@ -391,18 +391,22 @@ class NDFPointDataset(data.Dataset):
         points_action -= center
         points_anchor -= center
 
-        if self.type == "train" or (self.type == "val" and not self.dataset_cfg.val_use_defaults):
+        if self.type == "train" or (
+            self.type == "val" and not self.dataset_cfg.val_use_defaults
+        ):
             # Apply augmentations to the point clouds in their final positions
             points_action = maybe_apply_augmentations(
                 points_action,
                 min_num_points=self.dataset_cfg.sample_size,
                 ball_occlusion_param={
                     "ball_occlusion": self.dataset_cfg.action_ball_occlusion,
-                    "ball_radius": self.dataset_cfg.action_ball_radius * self.dataset_cfg.pcd_scale_factor,
+                    "ball_radius": self.dataset_cfg.action_ball_radius
+                    * self.dataset_cfg.pcd_scale_factor,
                 },
                 plane_occlusion_param={
                     "plane_occlusion": self.dataset_cfg.action_plane_occlusion,
-                    "plane_standoff": self.dataset_cfg.action_plane_standoff * self.dataset_cfg.pcd_scale_factor,
+                    "plane_standoff": self.dataset_cfg.action_plane_standoff
+                    * self.dataset_cfg.pcd_scale_factor,
                 },
             )
             points_anchor = maybe_apply_augmentations(
@@ -410,11 +414,13 @@ class NDFPointDataset(data.Dataset):
                 min_num_points=self.dataset_cfg.sample_size,
                 ball_occlusion_param={
                     "ball_occlusion": self.dataset_cfg.anchor_ball_occlusion,
-                    "ball_radius": self.dataset_cfg.anchor_ball_radius * self.dataset_cfg.pcd_scale_factor,
+                    "ball_radius": self.dataset_cfg.anchor_ball_radius
+                    * self.dataset_cfg.pcd_scale_factor,
                 },
                 plane_occlusion_param={
                     "plane_occlusion": self.dataset_cfg.anchor_plane_occlusion,
-                    "plane_standoff": self.dataset_cfg.anchor_plane_standoff * self.dataset_cfg.pcd_scale_factor,
+                    "plane_standoff": self.dataset_cfg.anchor_plane_standoff
+                    * self.dataset_cfg.pcd_scale_factor,
                 },
             )
 
@@ -423,12 +429,12 @@ class NDFPointDataset(data.Dataset):
             points_action, _ = downsample_pcd(
                 points_action.unsqueeze(0),
                 num_points=self.dataset_cfg.sample_size,
-                type='fps',
+                type="fps",
             )
             points_anchor, _ = downsample_pcd(
                 points_anchor.unsqueeze(0),
                 num_points=self.dataset_cfg.sample_size,
-                type='fps',
+                type="fps",
             )
         else:
             # Downsample the point clouds
@@ -444,7 +450,7 @@ class NDFPointDataset(data.Dataset):
             )
         points_action = points_action.squeeze(0)
         points_anchor = points_anchor.squeeze(0)
-        
+
         # Get transforms for the action and anchor point clouds
         T0 = random_se3(
             N=1,
@@ -482,15 +488,6 @@ class NDFPointDataset(data.Dataset):
                 .compose(T1)
             )
             T_aug_action2goal_list.append(T_aug_action2goal)
-
-        from non_rigid.utils.vis_utils import plot_multi_np
-        plot_multi_np([
-            points_action.numpy(),
-            goal_points_action.numpy(),
-            goal_points_anchor.numpy(),
-        ])
-        breakpoint()
-
 
         data = {
             "pc": goal_points_action,  # Action points in goal position

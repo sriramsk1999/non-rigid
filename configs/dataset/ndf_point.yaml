@@ -8,8 +8,8 @@ type: ndf_point
 ###################################################
 num_demos: 10 # Number of demonstrations to load
 train_dataset_size: 1024 # Length of the train dataset
-val_dataset_size: 64 # Length of the validation dataset
-val_use_defaults: False # Use default values for some parameters on the validation set
+val_dataset_size: 128 # Length of the validation dataset
+val_use_defaults: True # Use default values for some parameters on the validation set
 
 ###################################################
 # Point Cloud Transformation Parameters

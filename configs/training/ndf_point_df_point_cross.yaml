@@ -11,4 +11,5 @@ training_sample_size: None # Set by the training loop, from dataset config.
 check_val_every_n_epochs: 100
 num_wta_trials: 20
 
+additional_train_logging_period: 10000 # Global step period to log additional training metrics
 prediction_error_type: demo # [demo, distractor_min], type of prediction error to use
