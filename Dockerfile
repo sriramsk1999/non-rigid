@@ -38,7 +38,7 @@ RUN pip install dglgo -f https://data.dgl.ai/wheels-test/repo.html
 # Make the working directory the home directory
 RUN mkdir $CODING_ROOT/code
 
-# Copy R-PAD dependencies
+# Get R-PAD dependencies
 WORKDIR $CODING_ROOT/code
 RUN git clone https://github.com/r-pad/pyg_libs.git
 WORKDIR $CODING_ROOT/code/pyg_libs
@@ -47,6 +47,7 @@ RUN pip install -e .
 WORKDIR $CODING_ROOT/code
 RUN git clone https://github.com/r-pad/visualize_3d.git
 WORKDIR $CODING_ROOT/code/visualize_3d
+RUN git checkout modified_plots
 RUN pip install -e .
 
 # Only copy in the source code that is necessary for the dependencies to install
