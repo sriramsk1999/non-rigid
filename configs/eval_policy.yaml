@@ -1,0 +1,32 @@
+mode: eval
+
+# This is somewhat arbitrary.
+job_type: ${mode}_${dataset.name}_${model.name}
+date: '2024-05-08'
+time: '09-44-17'
+
+defaults:
+  - dataset: proc_cloth_overfit
+  - model: df_base
+  - inference: ${dataset}_${model}
+  - _logging
+  - _self_
+
+seed: 42
+
+
+sim:
+  env: HangProcCloth-v0
+  viz: True
+
+checkpoint:
+  run_id: ???
+  reference: ${wandb.entity}/${wandb.project}/model-${checkpoint.run_id}:best
+
+resources:
+  num_workers: 4
+  gpus:
+    - 0
+
+wandb:
+  group: ???

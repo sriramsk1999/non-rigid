@@ -1,0 +1,11 @@
+name: pc_single_cloth_multi_anchor
+data_dir: "~/datasets/nrp/ProcCloth/single_cloth_multi_anchor/demos"
+type: cloth
+# sample_size: 213
+# sample_size_scene: 1594
+sample_size_action: 213
+# sample_size_anchor: 1381
+sample_size_anchor: 512
+downsample_type: fps
+type_args:
+  scene: True
