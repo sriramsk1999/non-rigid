@@ -10,6 +10,7 @@ import torch
 import torch.utils.data as data
 from typing import Dict
 
+from non_rigid.utils.augmentation_utils import maybe_apply_augmentations
 from non_rigid.utils.transform_utils import random_se3
 from non_rigid.utils.pointcloud_utils import downsample_pcd, get_multi_anchor_scene
 
@@ -29,9 +30,11 @@ class RigidDatasetCfg:
     train_dataset_size: int = 256
     # Length of the validation dataset
     val_dataset_size: int = 16
+    # Use default values for some parameters on the validation set
+    val_use_defaults: bool = False
 
     ###################################################
-    # Point cloud augmentation parameters
+    # Point Cloud Transformation Parameters
     ###################################################
     # [action, anchor, none], centers the point clouds w.r.t. the action, anchor, or no centering
     center_type: str = "anchor"
@@ -49,7 +52,7 @@ class RigidDatasetCfg:
     rotation_variance: float = 180
 
     ###################################################
-    # Distractor anchor point cloud parameters
+    # Distractor parameters
     ###################################################
     # Number of distractor anchor point clouds to load
     distractor_anchor_pcds: int = 0
@@ -58,6 +61,22 @@ class RigidDatasetCfg:
     # Translation and rotation variance for the distractor transformations
     distractor_translation_variance: float = 0.5
     distractor_rotation_variance: float = 180
+    
+    ###################################################
+    # Data Augmentation Parameters
+    ###################################################
+    # Probability of applying plane occlusion
+    action_plane_occlusion: float = 0.0
+    anchor_plane_occlusion: float = 0.0
+    # Standoff distance of the occluding plane from selected plane origin
+    action_plane_standoff: float = 0.0
+    anchor_plane_standoff: float = 0.0
+    # Probability of applying ball occlusion
+    action_ball_occlusion: float = 0.0
+    anchor_ball_occlusion: float = 0.0
+    # Radius of the occluding ball
+    action_ball_radius: float = 0.0
+    anchor_ball_radius: float = 0.0
 
 
 class RigidPointDataset(data.Dataset):
@@ -301,8 +320,9 @@ class NDFPointDataset(data.Dataset):
 
         dir_type = self.type if self.type == "train" else "test"
         self.dataset_dir = self.root / f"{dir_type}_data/renders"
-        self.num_demos = int(len(os.listdir(self.dataset_dir)))
+        print(f'Loading NDF dataset from {self.dataset_dir}')
         self.demo_files = list(self.dataset_dir.glob("*_teleport_obj_points.npz"))
+        self.num_demos = len(self.demo_files)
         if self.dataset_cfg.num_demos is not None and self.type == "train":
             self.demo_files = self.demo_files[: self.dataset_cfg.num_demos]
             self.num_demos = len(self.demo_files)
@@ -371,22 +391,61 @@ class NDFPointDataset(data.Dataset):
         points_action -= center
         points_anchor -= center
 
-        # Downsample the point clouds
-        points_action, _ = downsample_pcd(
-            points_action.unsqueeze(0),
-            num_points=self.dataset_cfg.sample_size,
-            type=self.dataset_cfg.downsample_type,
-        )
-        points_anchor, _ = downsample_pcd(
-            points_anchor.unsqueeze(0),
-            num_points=self.dataset_cfg.sample_size,
-            type=self.dataset_cfg.downsample_type,
-        )
+        if self.type == "train" or (self.type == "val" and not self.dataset_cfg.val_use_defaults):
+            # Apply augmentations to the point clouds in their final positions
+            points_action = maybe_apply_augmentations(
+                points_action,
+                min_num_points=self.dataset_cfg.sample_size,
+                ball_occlusion_param={
+                    "ball_occlusion": self.dataset_cfg.action_ball_occlusion,
+                    "ball_radius": self.dataset_cfg.action_ball_radius * self.dataset_cfg.pcd_scale_factor,
+                },
+                plane_occlusion_param={
+                    "plane_occlusion": self.dataset_cfg.action_plane_occlusion,
+                    "plane_standoff": self.dataset_cfg.action_plane_standoff * self.dataset_cfg.pcd_scale_factor,
+                },
+            )
+            points_anchor = maybe_apply_augmentations(
+                points_anchor,
+                min_num_points=self.dataset_cfg.sample_size,
+                ball_occlusion_param={
+                    "ball_occlusion": self.dataset_cfg.anchor_ball_occlusion,
+                    "ball_radius": self.dataset_cfg.anchor_ball_radius * self.dataset_cfg.pcd_scale_factor,
+                },
+                plane_occlusion_param={
+                    "plane_occlusion": self.dataset_cfg.anchor_plane_occlusion,
+                    "plane_standoff": self.dataset_cfg.anchor_plane_standoff * self.dataset_cfg.pcd_scale_factor,
+                },
+            )
+
+        if self.type == "val" and self.dataset_cfg.val_use_defaults:
+            # Downsample the point clouds
+            points_action, _ = downsample_pcd(
+                points_action.unsqueeze(0),
+                num_points=self.dataset_cfg.sample_size,
+                type='fps',
+            )
+            points_anchor, _ = downsample_pcd(
+                points_anchor.unsqueeze(0),
+                num_points=self.dataset_cfg.sample_size,
+                type='fps',
+            )
+        else:
+            # Downsample the point clouds
+            points_action, _ = downsample_pcd(
+                points_action.unsqueeze(0),
+                num_points=self.dataset_cfg.sample_size,
+                type=self.dataset_cfg.downsample_type,
+            )
+            points_anchor, _ = downsample_pcd(
+                points_anchor.unsqueeze(0),
+                num_points=self.dataset_cfg.sample_size,
+                type=self.dataset_cfg.downsample_type,
+            )
         points_action = points_action.squeeze(0)
         points_anchor = points_anchor.squeeze(0)
-
-        # Transform the point clouds
-        # ransform the point clouds
+        
+        # Get transforms for the action and anchor point clouds
         T0 = random_se3(
             N=1,
             rot_var=self.dataset_cfg.rotation_variance,
@@ -400,24 +459,19 @@ class NDFPointDataset(data.Dataset):
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
 
+        # Get the goal action and anchor point clouds
         goal_points_action = T1.transform_points(points_action)
         goal_points_anchor = T1.transform_points(points_anchor)
 
-        # Get starting action point cloud
-        # Transform the action point cloud
+        # Get the 'context' action point cloud
         goal_points_action_mean = goal_points_action.mean(dim=0)
         points_action = goal_points_action - goal_points_action_mean
         points_action = T0.transform_points(points_action)
 
-        # # Get the points action to goal points action transformation
-        # print(f'goal_points_action_mean: {goal_points_action_mean}')
-        # from non_rigid.utils.vis_utils import plot_multi_np
-
+        # Get transforms for metrics calculation and visualizations
         T_action2goal = T0.inverse().compose(
             Translate(goal_points_action_mean.unsqueeze(0))
         )
-        # action2goal = T_action2goal.transform_points(points_action)
-
         T_aug_action2goal_list = []
         for T_distractor in T_distractor_list:
             T_aug_action2goal = T_action2goal.compose(
@@ -428,10 +482,15 @@ class NDFPointDataset(data.Dataset):
                 .compose(T1)
             )
             T_aug_action2goal_list.append(T_aug_action2goal)
-        # aug_action2goal = T_aug_action2goal_list[0].transform_points(points_action)
 
-        # plot_multi_np([goal_points_action.numpy(), action2goal.numpy(), goal_points_anchor.numpy(), aug_action2goal.numpy()])
-        # breakpoint()
+        from non_rigid.utils.vis_utils import plot_multi_np
+        plot_multi_np([
+            points_action.numpy(),
+            goal_points_action.numpy(),
+            goal_points_anchor.numpy(),
+        ])
+        breakpoint()
+
 
         data = {
             "pc": goal_points_action,  # Action points in goal position
@@ -442,6 +501,7 @@ class NDFPointDataset(data.Dataset):
             "T_action2goal": T_action2goal.get_matrix().squeeze(0).T,
         }
 
+        # If we have distractor anchor point clouds, add their transforms
         if self.dataset_cfg.distractor_anchor_pcds > 0:
             data["T_distractor_list"] = torch.stack(
                 [T.get_matrix().squeeze(0).T for T in T_distractor_list]

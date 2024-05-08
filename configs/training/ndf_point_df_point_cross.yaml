@@ -11,4 +11,4 @@ training_sample_size: None # Set by the training loop, from dataset config.
 check_val_every_n_epochs: 100
 num_wta_trials: 20
 
-prediction_error_type: distractor_min # [demo, distractor_min], type of prediction error to use
+prediction_error_type: demo # [demo, distractor_min], type of prediction error to use
