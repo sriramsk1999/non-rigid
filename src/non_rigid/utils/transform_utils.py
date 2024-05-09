@@ -4,8 +4,11 @@ from pytorch3d.transforms import (
     Rotate,
     axis_angle_to_matrix,
     quaternion_to_matrix,
+    so3_rotation_angle,
 )
 import torch
+import torch.nn.functional as F
+from typing import Tuple, List
 
 
 def random_se3(
@@ -13,7 +16,7 @@ def random_se3(
     rot_var: float = np.pi / 180 * 5,
     trans_var: float = 0.1,
     rot_sample_method: str = "axis_angle",
-    device=None,
+    device: str = None,
 ) -> Transform3d:
     """
     Generates random transforms in SE(3) space.
@@ -40,7 +43,7 @@ def random_se3(
         "quat_uniform",
         "random_flat_upright",
         "random_upright",
-        "identity"
+        "identity",
     ]
 
     if rot_sample_method == "axis_angle":
@@ -120,3 +123,156 @@ def random_se3(
     else:
         raise ValueError(f"Unknown rot_sample_method: {rot_sample_method}")
     return Rotate(R, device=device).translate(t)
+
+
+def symmetric_orthogonalization(M: torch.Tensor) -> torch.Tensor:
+    """
+    Maps arbitrary input matrices onto SO(3) via symmetric orthogonalization.
+    (modified from https://github.com/amakadia/svd_for_pose)
+
+    Args:
+        M: should have size [batch_size, 3, 3]
+
+    Returns:
+        torch.Tensor: Output has size [batch_size, 3, 3], where each inner 3x3 matrix is in SO(3).
+    """
+    U, _, Vh = torch.linalg.svd(M)
+    det = torch.det(torch.bmm(U, Vh)).view(-1, 1, 1)
+    Vh = torch.cat((Vh[:, :2, :], Vh[:, -1:, :] * det), 1)
+    R = U @ Vh
+    return R
+
+
+def flow_to_tf(
+    start_xyz: torch.Tensor,
+    flow: torch.Tensor,
+) -> Transform3d:
+    """
+    Converts point-wise flows into a rigid transform.
+
+    Args:
+        start_xyz: (B, N, 3) tensor of initial point positions
+        flow: (B, N, 3) tensor of point-wise flows
+
+    Returns:
+        Transform3d: rigid transform
+    """
+    assert start_xyz.shape == flow.shape
+    B, N, _ = start_xyz.shape
+
+    start_xyz_mean = start_xyz.mean(dim=1, keepdim=True)
+    start_xyz_demean = start_xyz - start_xyz_mean
+
+    target_xyz = start_xyz + flow
+    target_xyz_mean = target_xyz.mean(dim=1, keepdim=True)
+    target_xyz_demean = target_xyz - target_xyz_mean
+
+    X = torch.bmm(start_xyz_demean.transpose(-2, -1), target_xyz_demean)
+
+    R = symmetric_orthogonalization(X)
+    t = target_xyz_mean - torch.bmm(start_xyz_mean, R)
+
+    return Rotate(R).translate(t.squeeze(1))
+
+
+def get_degree_angle(T: Transform3d) -> Tuple[float, float, float]:
+    """
+    Get the maximum, minimum, and mean rotation angles in degrees from a Transform3d object.
+
+    Args:
+        T: Transform3d object
+
+    Returns:
+        Tuple[float, float, float]: Tuple of maximum, minimum, and mean rotation angles in degrees.
+    """
+
+    angle_rad_T = (
+        so3_rotation_angle(T.get_matrix()[:, :3, :3], eps=1e-2) * 180 / np.pi
+    )  # B
+
+    max = torch.max(angle_rad_T).item()
+    min = torch.min(angle_rad_T).item()
+    mean = torch.mean(angle_rad_T).item()
+    return max, min, mean
+
+
+def get_translation(T: Transform3d) -> Tuple[float, float, float]:
+    """
+    Get the maximum, minimum, and mean translation magnitudes from a Transform3d object.
+
+    Args:
+        T: Transform3d object
+
+    Returns:
+        Tuple[float, float, float]: Tuple of maximum, minimum, and mean translation magnitudes.
+    """
+    t = T.get_matrix()[:, 3, :3]  # B,3
+    t_norm = torch.norm(t, dim=1)  # B
+    max = torch.max(t_norm).item()
+    min = torch.min(t_norm).item()
+    mean = torch.mean(t_norm).item()
+    return max, min, mean
+
+
+def get_transform_list_min_rotation_errors(
+    T1: Transform3d, T_list: List[Transform3d]
+) -> Tuple[float, float, float]:
+    """
+    Get the maximum, minimum, and mean rotation errors in degrees between a Transform3d object and a list of Transform3d objects.
+
+    Args:
+        T1: Transform3d object
+        T_list: List of Transform3d objects
+
+    Returns:
+        Tuple[float, float, float]: Tuple of maximum, minimum, and mean rotation errors in degrees.
+    """
+    angle_rad_T1 = (
+        so3_rotation_angle(T1.get_matrix()[:, :3, :3], eps=1e-2) * 180 / np.pi
+    )  # B
+    angle_rad_T_list = []
+    for T in T_list:
+        angle_rad_T = (
+            so3_rotation_angle(T.get_matrix()[:, :3, :3], eps=1e-2) * 180 / np.pi
+        )
+        angle_rad_T_list.append(angle_rad_T)
+
+    angle_rad_min = torch.min(angle_rad_T1, angle_rad_T_list[0])
+    for angle_rad_T in angle_rad_T_list[1:]:
+        angle_rad_min = torch.min(angle_rad_min, angle_rad_T)
+
+    max = torch.max(angle_rad_min).item()
+    min = torch.min(angle_rad_min).item()
+    mean = torch.mean(angle_rad_min).item()
+    return max, min, mean
+
+
+def get_transform_list_min_translation_errors(
+    T1: Transform3d, T_list: List[Transform3d]
+) -> Tuple[float, float, float]:
+    """
+    Get the maximum, minimum, and mean translation errors between a Transform3d object and a list of Transform3d objects.
+
+    Args:
+        T1: Transform3d object
+        T_list: List of Transform3d objects
+
+    Returns:
+        Tuple[float, float, float]: Tuple of maximum, minimum, and mean translation errors.
+    """
+    t1 = T1.get_matrix()[:, 3, :3]  # B,3
+    t1_norm = torch.norm(t1, dim=1)  # B
+    t_list = []
+    for T in T_list:
+        t = T.get_matrix()[:, 3, :3]  # B,3
+        t_norm = torch.norm(t, dim=1)  # B
+        t_list.append(t_norm)
+
+    t_min = torch.min(t1_norm, t_list[0])
+    for t in t_list[1:]:
+        t_min = torch.min(t_min, t)
+
+    max = torch.max(t_min).item()
+    min = torch.min(t_min).item()
+    mean = torch.mean(t_min).item()
+    return max, min, mean

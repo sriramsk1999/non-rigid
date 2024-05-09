@@ -34,6 +34,16 @@ def flow_rmse(pred_flow, gt_flow, mask, seg):
         mse = mse.mean(dim=-1)
     return torch.sqrt(mse)
 
+
+def pcd_rmse(pred_pc, gt_pc):
+    """
+        pred_pc: [n, sample_size, 3]
+        gt_pc: [n, sample_size, 3]
+    """
+    mse = (pred_pc - gt_pc).pow(2).sum(dim=-1)
+    mse = mse.mean(dim=-1)
+    return torch.sqrt(mse)
+
 ########## CORRESPONDENCE-FREE METRICS ##########
 
 def get_chamfer_pairs(inference_pcs, reference_pcs):

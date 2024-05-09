@@ -22,8 +22,9 @@ from non_rigid.models.dit.models import (
     DiT_PointCloud_Unc_Cross,
 )
 from non_rigid.models.dit.diffusion import create_diffusion
+from non_rigid.metrics.error_metrics import get_pred_pcd_rigid_errors
 from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse, pc_nn
-from non_rigid.utils.vis_utils import get_color
+from non_rigid.utils.logging_utils import viz_predicted_vs_gt
 
 from diffusers import get_cosine_schedule_with_warmup
 
@@ -314,55 +315,21 @@ class FlowPredictionTrainingModule(L.LightningModule):
             wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": wandb.Object3D(predicted_vs_gt_wta)})
 
         if self.model_cfg.type == "flow_cross":
-            # Visualize predicted vs ground truth
+            # Choose random example to visualize
             viz_idx = np.random.randint(0, batch["pc"].shape[0])
-            
+
             pc_pos_viz = batch["pc"][viz_idx, :, :3]
             pc_action_viz = batch["pc_action"][viz_idx, :, :3]
             pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
-            
             pred_flows_viz = pred_flows_wta[viz_idx, :, :3]
             pred_action_wta_viz = pc_pos_viz + pred_flows_viz
             
-            pc_comb_viz = torch.cat([pc_action_viz, pc_anchor_viz], dim=0)
-            pc_comb_viz_min = pc_comb_viz.min(dim=0).values
-            pc_comb_viz_max = pc_comb_viz.max(dim=0).values
-            pc_comb_viz_extent = pc_comb_viz_max - pc_comb_viz_min
-            pred_action_wta_viz = pred_action_wta_viz[
-                (
-                    pred_action_wta_viz[:, 0]
-                    > pc_comb_viz_min[0] - 0.5 * pc_comb_viz_extent[0]
-                )
-                & (
-                    pred_action_wta_viz[:, 0]
-                    < pc_comb_viz_max[0] + 0.5 * pc_comb_viz_extent[0]
-                )
-                & (
-                    pred_action_wta_viz[:, 1]
-                    > pc_comb_viz_min[1] - 0.5 * pc_comb_viz_extent[1]
-                )
-                & (
-                    pred_action_wta_viz[:, 1]
-                    < pc_comb_viz_max[1] + 0.5 * pc_comb_viz_extent[1]
-                )
-                & (
-                    pred_action_wta_viz[:, 2]
-                    > pc_comb_viz_min[2] - 0.5 * pc_comb_viz_extent[2]
-                )
-                & (
-                    pred_action_wta_viz[:, 2]
-                    < pc_comb_viz_max[2] + 0.5 * pc_comb_viz_extent[2]
-                )
-            ]
-            predicted_vs_gt_wta_tensors = [
-                pc_action_viz,
-                pc_anchor_viz,
-                pred_action_wta_viz,
-            ]
-            predicted_vs_gt_wta_colors = ["green", "red", "blue"]
-            predicted_vs_gt_wta = get_color(
-                tensor_list=predicted_vs_gt_wta_tensors,
-                color_list=predicted_vs_gt_wta_colors,
+            # Get predicted vs. ground truth visualization            
+            predicted_vs_gt_wta = viz_predicted_vs_gt(
+                pc_pos_viz=pc_pos_viz,
+                pc_action_viz=pc_action_viz,
+                pc_anchor_viz=pc_anchor_viz,
+                pred_action_viz=pred_action_wta_viz,
             )
             wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": wandb.Object3D(predicted_vs_gt_wta)})
             
@@ -511,7 +478,7 @@ class PointPredictionTrainingModule(L.LightningModule):
         self.network = network
         self.training_cfg = training_cfg
         self.model_cfg = model_cfg
-        
+
         self.lr = training_cfg.lr
         self.weight_decay = training_cfg.weight_decay  # 1e-5
         # self.mode, self.traj_len so far not needed
@@ -537,15 +504,14 @@ class PointPredictionTrainingModule(L.LightningModule):
 
     def forward(self, batch, t, mode="train"):
         # Extract point clouds from batch
-        
+
         pos = batch["pc"].permute(0, 2, 1)  # B, C, N
         pc_action = batch["pc_action"].permute(0, 2, 1)  # B, C, N
         pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # B, C, N
 
         # Setup additional data required by the model
         model_kwargs = dict(
-            y=pc_anchor,  # Pass original anchor point cloud
-            x0=pc_action
+            y=pc_anchor, x0=pc_action  # Pass original anchor point cloud
         )
 
         # Run diffusion
@@ -554,15 +520,6 @@ class PointPredictionTrainingModule(L.LightningModule):
             self.network, pos, t, model_kwargs, noise
         )
         loss = loss_dict["loss"].mean()
-
-        # Logging
-        self.log_dict(
-            {
-                f"{mode} loss": loss,
-            },
-            add_dataloader_idx=False,
-            prog_bar=mode == "train",
-        )
         return None, loss
 
     @torch.no_grad()
@@ -594,12 +551,14 @@ class PointPredictionTrainingModule(L.LightningModule):
         pred_action = pred_action.permute(0, 2, 1)
         if unflatten:
             pred_action = pred_action.reshape(bs, num_samples, self.sample_size, -1)
-            
+
         for key in model_kwargs:
             if key in ["x0", "y"]:
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
-                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
+                    model_kwargs[key] = model_kwargs[key].reshape(
+                        bs, num_samples, self.sample_size, -1
+                    )
 
         return model_kwargs, pred_action, results
 
@@ -627,12 +586,12 @@ class PointPredictionTrainingModule(L.LightningModule):
             .expand(-1, self.num_wta_trials, -1, -1)
             .reshape(bs * self.num_wta_trials, -1, self.sample_size)
         )
-        
+
         model_kwargs = dict(
-            y=pc_anchor, 
+            y=pc_anchor,
             x0=pc_action,
         )
-        
+
         # generating diffusion predictions
         model_kwargs, pred_action, results = self.predict(
             bs, model_kwargs, self.num_wta_trials, unflatten=False
@@ -651,7 +610,7 @@ class PointPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_actions_wta = pred_action[torch.arange(bs), winner]
-        return pred_actions_wta, cos_sim_wta, rmse_wta
+        return pred_actions_wta, pred_action, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(
@@ -670,16 +629,105 @@ class PointPredictionTrainingModule(L.LightningModule):
             0, self.diff_train_steps, (self.batch_size,), device=self.device
         ).long()
         _, loss = self(batch, t, "train")
+
+        #########################################################
+        # Logging
+        #########################################################
+        self.log_dict(
+            {
+                f"train/loss": loss,
+            },
+            add_dataloader_idx=False,
+            prog_bar=True,
+        )
+
+        # Determine if additional logging should be done
+        do_additional_logging = (
+            self.global_step % self.training_cfg.additional_train_logging_period == 0
+        )
+
+        # Additional logging
+        if do_additional_logging:
+            pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
+                batch, mode="val"
+            )
+
+            self.log_dict(
+                {
+                    f"train_wta/cos_sim": cos_sim_wta.mean(),
+                    f"train_wta/rmse": rmse_wta.mean(),
+                },
+                add_dataloader_idx=False,
+                prog_bar=True,
+            )
+
+            # Get prediction error
+            start_xyz = batch["pc_action"]
+            pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
+            T_action2goal = batch["T_action2goal"]
+            T_action2distractor_list = (
+                batch["T_action2distractor_list"]
+                if "T_action2distractor_list" in batch
+                else None
+            )
+            errors = get_pred_pcd_rigid_errors(
+                start_xyz=start_xyz,
+                pred_xyz=pred_xyz,
+                T_gt=T_action2goal,
+                T_action2distractor_list=T_action2distractor_list,
+                error_type=self.training_cfg.prediction_error_type,
+            )
+            self.log_dict(
+                {
+                    "train/error_t_mean": errors["error_t_mean"],
+                    "train/error_R_mean": errors["error_R_mean"],
+                },
+                add_dataloader_idx=False,
+                prog_bar=True,
+            )
+
+        #########################################################
+        # Visualization
+        #########################################################
+        # Additional visualization
+        if do_additional_logging:
+            viz_idx = np.random.randint(0, batch["pc"].shape[0])
+
+            pc_pos_viz = batch["pc"][viz_idx, :, :3]
+            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+            pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
+            pred_action_wta_viz = pred_actions_wta[viz_idx, :, :3]
+
+            # Get predicted vs. ground truth visualization
+            predicted_vs_gt_wta_viz = viz_predicted_vs_gt(
+                pc_pos_viz=pc_pos_viz,
+                pc_action_viz=pc_action_viz,
+                pc_anchor_viz=pc_anchor_viz,
+                pred_action_viz=pred_action_wta_viz,
+            )
+            wandb.log({"train_wta/predicted_vs_gt": predicted_vs_gt_wta_viz})
+
+            pred_action_viz = pred_actions[viz_idx, 0, :, :3]
+            predicted_vs_gt_viz = viz_predicted_vs_gt(
+                pc_pos_viz=pc_pos_viz,
+                pc_action_viz=pc_action_viz,
+                pc_anchor_viz=pc_anchor_viz,
+                pred_action_viz=pred_action_viz,
+            )
+            wandb.log({"train/predicted_vs_gt": predicted_vs_gt_viz})
+
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
         with torch.no_grad():
-            pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+            pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
                 batch, mode="val"
             )
 
+        #########################################################
         # Logging
+        #########################################################
         self.log_dict(
             {
                 f"val_wta/cos_sim": cos_sim_wta.mean(),
@@ -689,64 +737,69 @@ class PointPredictionTrainingModule(L.LightningModule):
             prog_bar=True,
         )
 
-        # Visualize predicted vs ground truth
+        # Get prediction error
+        start_xyz = batch["pc_action"]
+        pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
+        T_action2goal = batch["T_action2goal"]
+        T_action2distractor_list = (
+            batch["T_action2distractor_list"]
+            if "T_action2distractor_list" in batch
+            else None
+        )
+        errors = get_pred_pcd_rigid_errors(
+            start_xyz=start_xyz,
+            pred_xyz=pred_xyz,
+            T_gt=T_action2goal,
+            T_action2distractor_list=T_action2distractor_list,
+            error_type=self.training_cfg.prediction_error_type,
+        )
+        self.log_dict(
+            {
+                "val/error_t_mean": errors["error_t_mean"],
+                "val/error_R_mean": errors["error_R_mean"],
+            },
+            add_dataloader_idx=False,
+            prog_bar=True,
+        )
+
+        #########################################################
+        # Visualization
+        #########################################################
+
+        # Choose random example to visualize
         viz_idx = np.random.randint(0, batch["pc"].shape[0])
 
         pc_pos_viz = batch["pc"][viz_idx, :, :3]
         pc_action_viz = batch["pc_action"][viz_idx, :, :3]
         pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
-
-        pc_comb_viz = torch.cat([pc_action_viz, pc_anchor_viz], dim=0)
-        pc_comb_viz_min = pc_comb_viz.min(dim=0).values
-        pc_comb_viz_max = pc_comb_viz.max(dim=0).values
-        pc_comb_viz_extent = pc_comb_viz_max - pc_comb_viz_min
         pred_action_wta_viz = pred_actions_wta[viz_idx, :, :3]
-        pred_action_wta_viz = pred_action_wta_viz[
-            (
-                pred_action_wta_viz[:, 0]
-                > pc_comb_viz_min[0] - 0.5 * pc_comb_viz_extent[0]
-            )
-            & (
-                pred_action_wta_viz[:, 0]
-                < pc_comb_viz_max[0] + 0.5 * pc_comb_viz_extent[0]
-            )
-            & (
-                pred_action_wta_viz[:, 1]
-                > pc_comb_viz_min[1] - 0.5 * pc_comb_viz_extent[1]
-            )
-            & (
-                pred_action_wta_viz[:, 1]
-                < pc_comb_viz_max[1] + 0.5 * pc_comb_viz_extent[1]
-            )
-            & (
-                pred_action_wta_viz[:, 2]
-                > pc_comb_viz_min[2] - 0.5 * pc_comb_viz_extent[2]
-            )
-            & (
-                pred_action_wta_viz[:, 2]
-                < pc_comb_viz_max[2] + 0.5 * pc_comb_viz_extent[2]
-            )
-        ]
-        predicted_vs_gt_wta_tensors = [
-            pc_pos_viz,
-            pc_anchor_viz,
-            pred_action_wta_viz,
-        ]
-        predicted_vs_gt_wta_colors = ["green", "red", "blue"]
-        predicted_vs_gt_wta = get_color(
-            tensor_list=predicted_vs_gt_wta_tensors,
-            color_list=predicted_vs_gt_wta_colors,
+
+        # Get predicted vs. ground truth visualization
+        predicted_vs_gt_wta_viz = viz_predicted_vs_gt(
+            pc_pos_viz=pc_pos_viz,
+            pc_action_viz=pc_action_viz,
+            pc_anchor_viz=pc_anchor_viz,
+            pred_action_viz=pred_action_wta_viz,
         )
-        wandb.log({"val_wta/predicted_vs_gt": wandb.Object3D(predicted_vs_gt_wta)})
+        wandb.log({"val_wta/predicted_vs_gt": predicted_vs_gt_wta_viz})
+
+        pred_action_viz = pred_actions[viz_idx, 0, :, :3]
+        predicted_vs_gt_viz = viz_predicted_vs_gt(
+            pc_pos_viz=pc_pos_viz,
+            pc_action_viz=pc_action_viz,
+            pc_anchor_viz=pc_anchor_viz,
+            pred_action_viz=pred_action_viz,
+        )
+        wandb.log({"val/predicted_vs_gt": predicted_vs_gt_viz})
 
         return {
             "loss": rmse_wta,
             "cos_sim": cos_sim_wta,
         }
-        
+
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+        pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
             batch, mode="val"
         )
         return {
