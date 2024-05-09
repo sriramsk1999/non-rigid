@@ -25,34 +25,7 @@ from non_rigid.models.dit.diffusion import create_diffusion
 from tqdm import tqdm
 import numpy as np
 
-def predict(network, batch, device, diffusion, trials, sample_size):
-    # pos, gt_flow, seg, t_wc, goal = batch
-    # pos, gt_flow, seg = batch
-    pos = batch["pc_init"]
-    gt_flow = batch["flow"]
-    seg = batch["seg"]
-    # seg = torch.ones_like(gt_flow[..., 0], device=device)
-    pos = pos.to(device)
-    gt_flow = gt_flow.to(device)
-    seg = seg.to(device)
-    # reshaping and expanding for wta
-    bs = pos.shape[0]
-    pos = pos.transpose(-1, -2).unsqueeze(1).expand(-1, trials, -1, -1).reshape(bs * trials, 3, sample_size)
-    gt_flow = gt_flow.unsqueeze(1).expand(-1, trials, -1, -1).reshape(bs * trials, sample_size, 3)
-    seg = seg.unsqueeze(1).expand(-1, trials, -1).reshape(bs * trials, -1)
-    # generating latents and running diffusion
-    model_kwargs = dict(pos=pos)
-    z = torch.randn(
-        bs * trials, 3, sample_size, device=device
-    )
-    pred_flow, results = diffusion.p_sample_loop(
-        network, z.shape, z, clip_denoised=False,
-        model_kwargs=model_kwargs, progress=True, device=device
-    )
-    pred_flow = pred_flow.permute(0, 2, 1).reshape(bs, trials, -1, 3)
-    pos = pos.permute(0, 2, 1).reshape(bs, trials, -1, 3)
-    gt_flow = gt_flow.reshape(bs, trials, -1, 3)
-    return pos, pred_flow, gt_flow
+import rpad.visualize_3d.plots as vpl
 
 
 
@@ -98,6 +71,7 @@ def main(cfg):
         val_batch_size=cfg.inference.val_batch_size,
         num_workers=cfg.resources.num_workers,
         type=cfg.dataset.type,
+        **cfg.dataset.type_args,
     )
     datamodule.setup(stage="predict")
 
@@ -136,30 +110,35 @@ def main(cfg):
     network.eval()
     # move network to gpu for evaluation
     if torch.cuda.is_available():
-        network.cuda()
+        network.to("cuda:1")
     cfg.inference.sample_size = cfg.dataset.sample_size
     model = FlowPredictionInferenceModule(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
 
-    device = "cuda"
+    device = "cuda:1"
+    model.to(device)
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-    sample_size = cfg.dataset.sample_size
+    # sample_size = cfg.dataset.sample_size
     # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
-    train_dataset = ProcClothFlowDataset(data_root, "train")
-    val_dataset = ProcClothFlowDataset(data_root, "val")
+    train_dataset = ProcClothFlowDataset(data_root, "train", **cfg.dataset.type_args)
+    val_dataset = ProcClothFlowDataset(data_root, "val", **cfg.dataset.type_args)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=16, shuffle=False)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=4, shuffle=False)
-    num_wta_trials = 50
+    # num_wta_trials = 50
     diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
     
 
-    GET_TRAIN_METRICS = True
-    GET_VAL_METRICS = True
-    VISUALIZE_ALL = True
+    # GET_TRAIN_METRICS = True
+    # GET_VAL_METRICS = True
+    VISUALIZE_PREDS = False
+    VISUALIZE_PRED_IDS = [0, 1]
+    PREDS_PER_SAMPLE = 10
+
+
     VISUALIZE_SINGLE = True
     VISUALIZE_SINGLE_IDX = 0
 
-    MMD_METRICS = True
-    PRECISION_METRICS = True
+    MMD_METRICS = False
+    PRECISION_METRICS = False
 
 
 
@@ -191,17 +170,18 @@ def main(cfg):
 
     
     if MMD_METRICS:
-        train_outputs, val_outputs = trainer.predict(
+        train_outputs, val_outputs, val_ood_outputs = trainer.predict(
             model,
             dataloaders=[
                 datamodule.train_dataloader(),
-                datamodule.val_dataloader(),
+                *datamodule.val_dataloader(),
             ]
             )
 
         for outputs_list, name in [
             (train_outputs, "train"),
             (val_outputs, "val"),
+            (val_ood_outputs, "val_ood")
         ]:
             # Put everything on CPU, and flatten a list of dicts into one dict.
             out_cpu = [pytree.tree_map(lambda x: x.cpu(), o) for o in outputs_list]
@@ -217,16 +197,16 @@ def main(cfg):
 
 
     # TODO: for now, all action inputs are the same, so just grab the first one
+    # actions inputs no longer the same..grab val, sample a bunch, and eval all of them...
     
     if PRECISION_METRICS:
-        device = "cuda"
-        data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-        train_dataset = ProcClothFlowDataset(data_root, "train")
-        val_dataset = ProcClothFlowDataset(data_root, "val")
+        model.to(device)
+        # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+        #train_dataset = ProcClothFlowDataset(data_root, "train")
+        #val_dataset = ProcClothFlowDataset(data_root, "val")
         num_samples = cfg.inference.num_wta_trials
         # generate predictions
-        model.to(device)
-        action_input = train_dataset[0]["pc_init"].unsqueeze(0).to(device)
+        action_input = train_dataset[0]["pc"].unsqueeze(0).to(device)
         pos, pred_flows = model.predict(action_input, num_samples, False)
 
         # top - down heat map
@@ -253,76 +233,104 @@ def main(cfg):
                            nbins=20, title="Precision RMSE")
         fig.show()
         print(precision_rmses.mean())
-        quit()
 
 
-
-    if VISUALIZE_ALL:
-        anchor_pcs = []
-        for i in range(cfg.dataset.num_anchors):
-            anchor_pcs.append(np.load(data_root / f"anchor_{i}.npz")["pc"])
-        anchor_pc = np.concatenate(anchor_pcs)
-
-
-        import rpad.visualize_3d.plots as vpl
-        pred_pcs_t = []
-        gt_pcs_t = []
-        # visualizing predictions
-        for batch in tqdm(val_loader):
-            pos, pred_flow, gt_flow = predict(network, batch, device, diffusion, 10, 213)
-            
-            pred_pc = pos + pred_flow
-            gt_pc = pos[:, 0, ...] + gt_flow[:, 0, ...]
-
-            gt_pc_t = gt_pc.flatten(end_dim=-2).cpu().numpy()
-            pred_pc_t = pred_pc.flatten(end_dim=-2).cpu().numpy()
-            gt_pcs_t.append(gt_pc_t)
-            pred_pcs_t.append(pred_pc_t)
+    if VISUALIZE_PREDS:
         
-        pred_pcs_t = np.concatenate(pred_pcs_t)
-        gt_pcs_t = np.concatenate(gt_pcs_t)
-        # pred_seg = np.ones(pred_pcs_t.shape[0], dtype=np.int64)
-        pred_seg = np.array([np.arange(2, 322)] * 213).T.flatten()
+        for i in VISUALIZE_PRED_IDS:
+            pred_pcs = []
+            gt_pcs = []
+            # sampling predictions
+            sample = val_dataset[i]
+            pos = sample["pc"].to(device).unsqueeze(0)
+            gt_flow = sample["flow"].to(device).unsqueeze(0)
+            seg = sample["seg"].to(device).bool()
+            
+            # ground truth flow
+            gt_pc = (pos + gt_flow).flatten(end_dim=-2).cpu().numpy()
+            gt_seg = np.zeros(gt_pc.shape[0], dtype=np.int64)
+            # predicted flow
+            pred_pos, pred_flows = model.predict(pos, PREDS_PER_SAMPLE, False)
+            pred_pcs = (pred_pos[..., seg, :] + pred_flows[..., seg, :]).flatten(end_dim=-2).cpu().numpy()
+            # plot
+            # color_seg = np.array([np.arange(PREDS_PER_SAMPLE + 1)] * cfg.dataset.sample_size).T.flatten()
+            color_seg = np.array([np.arange(PREDS_PER_SAMPLE)] * seg.cpu().sum()).T.flatten()
 
-        gt_seg = np.zeros(gt_pcs_t.shape[0], dtype=np.int64)
-        anchor_seg = np.ones(anchor_pc.shape[0], dtype=np.int64)*1
+            fig = vpl.segmentation_fig(
+                np.concatenate((pos.cpu().squeeze(), gt_pc, pred_pcs)), 
+                np.concatenate((np.zeros(pos.shape[-2], dtype=np.int64), 
+                                gt_seg, color_seg)),
+            )
+            fig.show()
+        # pred_pcs = []
+        # gt_pcs = []
+        # # visualizing predictions
+        # for batch in tqdm(val_loader):
+        #     pos = batch["pc"].to(device)
+        #     gt_flow = batch["flow"].to(device)
+        #     gt_pc = (pos + gt_flow).flatten(end_dim=-2).cpu().numpy()
+        #     pos, pred_flows = model.predict(pos, 10, False)
+        #     pred_pc = (pos + pred_flows).flatten(end_dim=-2).cpu().numpy()
 
-        action_pc = train_dataset[0]["pc_init"]
-        action_seg = np.ones(action_pc.shape[0], dtype=np.int64)*1
+        #     gt_pcs.append(gt_pc)
+        #     pred_pcs.append(pred_pc)
+        #     # TODO: clean this up; better variable names, remove predict function
+        #     # remove all unnecssary variables
+        
+        # pred_pcs = np.concatenate(pred_pcs)
+        # gt_pcs = np.concatenate(gt_pcs)
+        # # pred_seg = np.ones(pred_pcs_t.shape[0], dtype=np.int64)
+        # pred_seg = np.array([np.arange(2, 322)] * 213).T.flatten()
 
-        fig = vpl.segmentation_fig(
-            # np.concatenate((pred_pcs_t, gt_pcs_t, anchor_pc, action_pc)), 
-            # np.concatenate((pred_seg, gt_seg, anchor_seg, action_seg)),
-            np.concatenate((pred_pcs_t, anchor_pc, action_pc)), 
-            np.concatenate((pred_seg, anchor_seg, action_seg))
-        )
-        fig.show()
+        # gt_seg = np.zeros(gt_pcs.shape[0], dtype=np.int64)
+        # # anchor_seg = np.ones(anchor_pc.shape[0], dtype=np.int64)*1
+
+        # action_pc = train_dataset[0]["pc"]
+        # action_seg = np.ones(action_pc.shape[0], dtype=np.int64)*1
+
+        # fig = vpl.segmentation_fig(
+        #     # np.concatenate((pred_pcs, gt_pcs, anchor_pc, action_pc)), 
+        #     # np.concatenate((pred_seg, gt_seg, anchor_seg, action_seg)),
+        #     np.concatenate((pred_pcs, gt_pcs, action_pc)), 
+        #     np.concatenate((pred_seg, gt_seg, action_seg)),
+        # )
+        # fig.show()
 
 
     # plot single diffusion chain
-    from non_rigid.utils.vis_utils import FlowNetAnimation
+    # TODO: have model.predict return results so this can just call that instead
+    # of having to create separate diffusion object
+    
     if VISUALIZE_SINGLE:
+        from non_rigid.utils.vis_utils import FlowNetAnimation
         animation = FlowNetAnimation()
-        pos  = val_dataset[0]["pc_init"]
-        pos = pos.unsqueeze(0).cuda().transpose(-1, -2)
-        z = torch.randn(1, 213, 3).cuda().transpose(-1, -2)
-        model_kwargs = dict(pos=pos)
-        # denoise
-        pred_flow, results = diffusion.p_sample_loop(
-            network, z.shape, z, clip_denoised=False,
-            model_kwargs=model_kwargs, progress=True, device=device
-        )
-        pred_flow = pred_flow.squeeze(0).permute(1, 0)
-        pcd = pos.squeeze().permute(1, 0).cpu()
+        pos = val_dataset[VISUALIZE_SINGLE_IDX]["pc"].to(device).unsqueeze(0)
+        seg = val_dataset[VISUALIZE_SINGLE_IDX]["seg"].to(device).bool()
 
-        combined_pcd = torch.cat([pcd, torch.as_tensor(anchor_pc)], dim=0)
+        pos[:, ~seg, :] += torch.tensor([[[0.0, 0, 5.0]]]).to(device)
+
+        pred_pos, pred_flow, results = model.predict(pos, 1, False, True)
+        print(pred_pos.shape, pred_flow.shape, len(results), results[0].shape)
+
+        # pos = pos.unsqueeze(0).cuda().transpose(-1, -2)
+        # z = torch.randn(1, 213, 3).cuda().transpose(-1, -2)
+        # model_kwargs = dict(pos=pos)
+        # # denoise
+        # pred_flow, results = diffusion.p_sample_loop(
+        #     network, z.shape, z, clip_denoised=False,
+        #     model_kwargs=model_kwargs, progress=True, device=device
+        # )
+        pred_flow = pred_flow.squeeze(0)
+        pcd = pred_pos.squeeze().cpu()
+
+        # combined_pcd = torch.cat([pcd, torch.as_tensor(anchor_pc)], dim=0)
 
         for noise_step in tqdm(results[0:]):
-            pred_flow_step = noise_step.squeeze(0).permute(1, 0).cpu()
+            pred_flow_step = noise_step.squeeze(0).cpu()
             animation.add_trace(
-                combined_pcd,
+                pcd,
                 [pcd],
-                [pred_flow_step],#combined_flow,
+                [pred_flow_step],
                 "red",
             )
 

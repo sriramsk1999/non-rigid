@@ -202,34 +202,40 @@ def main(cfg):
     val_dataloader, val_ood_dataloader = datamodule.val_dataloader()
 
 
-    total_successes = 0
-    for batch in tqdm(train_dataloader):
-        rot = batch["rot"].squeeze().numpy()
-        trans = batch["trans"].squeeze().numpy()
-        # breakpoint()
-        pred_flows = model_predict(cfg, model, batch)
-        total_successes += play(env, pred_flows, rot, trans)
-    print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
+    EVAL_TRAIN = True
+    EVAL_VAL = True
+    EVAL_VAL_OOD = True
 
-    total_successes = 0
-    for batch in tqdm(val_dataloader):
-        rot = batch["rot"].squeeze().numpy()
-        trans = batch["trans"].squeeze().numpy()
-        pred_flows = model_predict(cfg, model, batch)
-        total_successes += play(env, pred_flows, rot, trans)
-    print('Total successes on validation data: ', total_successes, '/', len(val_dataloader))
+    if EVAL_TRAIN:
+        print('Evaluating on training data...')
+        total_successes = 0
+        for batch in tqdm(train_dataloader):
+            rot = batch["rot"].squeeze().numpy()
+            trans = batch["trans"].squeeze().numpy()
+            # breakpoint()
+            pred_flows = model_predict(cfg, model, batch)
+            total_successes += play(env, pred_flows, rot, trans)
+        print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
 
-    total_successes = 0
-    for batch in tqdm(val_ood_dataloader):
-        rot = batch["rot"].squeeze().numpy()
-        trans = batch["trans"].squeeze().numpy()
-        pred_flows = model_predict(cfg, model, batch)
-        total_successes += play(env, pred_flows, rot, trans)
-    print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))
+    if EVAL_VAL:
+        print('Evaluating on validation data...')
+        total_successes = 0
+        for batch in tqdm(val_dataloader):
+            rot = batch["rot"].squeeze().numpy()
+            trans = batch["trans"].squeeze().numpy()
+            pred_flows = model_predict(cfg, model, batch)
+            total_successes += play(env, pred_flows, rot, trans)
+        print('Total successes on validation data: ', total_successes, '/', len(val_dataloader))
 
-
-    play(env, model, 5, args)
-
+    if EVAL_VAL_OOD:
+        print('Evaluating on ood validation data...')
+        total_successes = 0
+        for batch in tqdm(val_ood_dataloader):
+            rot = batch["rot"].squeeze().numpy()
+            trans = batch["trans"].squeeze().numpy()
+            pred_flows = model_predict(cfg, model, batch)
+            total_successes += play(env, pred_flows, rot, trans)
+        print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))
 
 
 if __name__ == '__main__':
