@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from functools import lru_cache
 import lightning as L
+from non_rigid.utils.vis_utils import plot_multi_np
 import numpy as np
 import omegaconf
 import os
@@ -47,12 +48,16 @@ class RigidDatasetCfg:
     downsample_type: str = "fps"
     # Scale factor to apply to the point clouds
     pcd_scale_factor: float = 1.0
+
     # Demonstration transformation parameters
     action_transform_type: str = "quat_uniform"
+    action_translation_variance: float = 0.0
+    action_rotation_variance: float = 180
+
+    # Demonstration transformation parameters
     anchor_transform_type: str = "quat_uniform"
-    # Translation and rotation variance for the action and anchor transformations
-    translation_variance: float = 0.5
-    rotation_variance: float = 180
+    anchor_translation_variance: float = 0.0
+    anchor_rotation_variance: float = 180
 
     ###################################################
     # Distractor parameters
@@ -161,14 +166,14 @@ class RigidPointDataset(data.Dataset):
         # ransform the point clouds
         T0 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.action_rotation_variance,
+            trans_var=self.dataset_cfg.action_translation_variance,
             rot_sample_method=self.dataset_cfg.action_transform_type,
         )
         T1 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.anchor_rotation_variance,
+            trans_var=self.dataset_cfg.anchor_translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
 
@@ -273,14 +278,14 @@ class RigidFlowDataset(data.Dataset):
         # Transform the point clouds
         T0 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.action_rotation_variance,
+            trans_var=self.dataset_cfg.action_translation_variance,
             rot_sample_method=self.dataset_cfg.action_transform_type,
         )
         T1 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.anchor_rotation_variance,
+            trans_var=self.dataset_cfg.anchor_translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
 
@@ -457,14 +462,14 @@ class NDFPointDataset(data.Dataset):
         # Get transforms for the action and anchor point clouds
         T0 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.action_rotation_variance,
+            trans_var=self.dataset_cfg.action_translation_variance,
             rot_sample_method=self.dataset_cfg.action_transform_type,
         )
         T1 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.anchor_rotation_variance,
+            trans_var=self.dataset_cfg.anchor_translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
 
@@ -555,49 +560,49 @@ class RPDiffPointDataset(data.Dataset):
         points_action_raw = points_raw[classes_raw == 0]
         points_anchor_raw = points_raw[classes_raw == 1]
 
-        points_action = torch.as_tensor(points_action_raw).float()
-        points_anchor = torch.as_tensor(points_anchor_raw).float()
+        points_action_raw = torch.as_tensor(points_action_raw).float()
+        points_anchor_raw = torch.as_tensor(points_anchor_raw).float()
 
         # Apply scale factor
-        points_action *= self.dataset_cfg.pcd_scale_factor
-        points_anchor *= self.dataset_cfg.pcd_scale_factor
+        points_action_scaled = points_action_raw * self.dataset_cfg.pcd_scale_factor
+        points_anchor_scaled = points_anchor_raw * self.dataset_cfg.pcd_scale_factor
 
         # Add distractor anchor point clouds
         if self.dataset_cfg.distractor_anchor_pcds > 0:
             (
                 _,
-                points_action,
-                points_anchor_base,
+                points_action_scaled,
+                points_anchor_scaled_base,
                 distractor_anchor_pcd_list,
                 T_distractor_list,
                 debug,
             ) = get_multi_anchor_scene(
                 points_gripper=None,
-                points_action=points_action.unsqueeze(0),
-                points_anchor_base=points_anchor.unsqueeze(0),
+                points_action=points_action_scaled.unsqueeze(0),
+                points_anchor_base=points_anchor_scaled.unsqueeze(0),
                 rot_var=self.dataset_cfg.distractor_rotation_variance,
                 trans_var=self.dataset_cfg.distractor_translation_variance,
                 rot_sample_method=self.dataset_cfg.distractor_transform_type,
                 num_anchors_to_add=self.dataset_cfg.distractor_anchor_pcds,
             )
-            points_anchor = torch.cat(
-                [points_anchor_base] + distractor_anchor_pcd_list, dim=1
+            points_anchor_scaled = torch.cat(
+                [points_anchor_scaled_base] + distractor_anchor_pcd_list, dim=1
             ).squeeze(0)
-            points_action = points_action.squeeze(0)
+            points_action_scaled = points_action_scaled.squeeze(0)
 
         # Center the point clouds
         if self.dataset_cfg.center_type == "action_center":
-            center = points_action.mean(axis=0)
+            center = points_action_scaled.mean(axis=0)
         elif self.dataset_cfg.center_type == "anchor_center":
-            center = points_anchor.mean(axis=0)
+            center = points_anchor_scaled.mean(axis=0)
         elif self.dataset_cfg.center_type == "anchor_random":
-            center = points_anchor[np.random.choice(len(points_anchor))]
+            center = points_anchor_scaled[np.random.choice(len(points_anchor_scaled))]
         elif self.dataset_cfg.center_type == "none":
             center = np.zeros(3)
         else:
             raise ValueError(f"Unknown center type: {self.dataset_cfg.center_type}")
-        points_action -= center
-        points_anchor -= center
+        points_action = points_action_scaled - center
+        points_anchor = points_anchor_scaled - center
 
         if self.type == "train" or (
             self.type == "val" and not self.dataset_cfg.val_use_defaults
@@ -662,14 +667,14 @@ class RPDiffPointDataset(data.Dataset):
         # Get transforms for the action and anchor point clouds
         T0 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.action_rotation_variance,
+            trans_var=self.dataset_cfg.action_translation_variance,
             rot_sample_method=self.dataset_cfg.action_transform_type,
         )
         T1 = random_se3(
             N=1,
-            rot_var=self.dataset_cfg.rotation_variance,
-            trans_var=self.dataset_cfg.translation_variance,
+            rot_var=self.dataset_cfg.anchor_rotation_variance,
+            trans_var=self.dataset_cfg.anchor_translation_variance,
             rot_sample_method=self.dataset_cfg.anchor_transform_type,
         )
 
@@ -721,8 +726,8 @@ class RPDiffPointDataset(data.Dataset):
             assert (
                 "rpdiff_descriptions_path" in self.dataset_cfg.misc_kwargs
             ), "rpdiff_descriptions_path must be provided in the dataset config"
-            data["pc_action_mean"] = points_action_raw.mean(axis=0)
-            data["pc_anchor_mean"] = points_anchor_raw.mean(axis=0)
+            data["goal_action_center"] = goal_points_action_mean
+            data["scene_center"] = center
 
             parent_fname = demo["multi_obj_mesh_file"].item()["parent"][0]
             parent_obj_name = (

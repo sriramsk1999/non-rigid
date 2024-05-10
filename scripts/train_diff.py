@@ -1,7 +1,7 @@
 import json
+import os
 from functools import partial
 from pathlib import Path
-import os
 
 import hydra
 import lightning as L
@@ -12,16 +12,21 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
-from non_rigid.datasets.rigid import RigidDataModule
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
-from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionTrainingModule, PointPredictionTrainingModule
+from non_rigid.datasets.rigid import RigidDataModule
+from non_rigid.models.df_base import (
+    DiffusionFlowBase,
+    FlowPredictionTrainingModule,
+    PointPredictionTrainingModule,
+)
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
-    LogPredictionSamplesCallback,
     CustomModelPlotsCallback,
+    LogPredictionSamplesCallback,
     create_model,
     match_fn,
 )
+
 
 @hydra.main(config_path="../configs", config_name="train", version_base="1.3")
 def main(cfg):
@@ -67,8 +72,9 @@ def main(cfg):
         elif cfg.dataset.multi_cloth.hole == "all":
             data_root = data_root / "multi_cloth_all/"
         else:
-            raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
-
+            raise ValueError(
+                f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}"
+            )
 
     if cfg.dataset.type in ["articulated", "articulated_multi"]:
         dm = MicrowaveFlowDataModule
@@ -76,10 +82,10 @@ def main(cfg):
         dm = ProcClothFlowDataModule
         # determine type based on model type
     elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point"]:
-        dm = RigidDataModule # TODO: Pass dataset cfg to all so we can remove partial
-    else: 
+        dm = RigidDataModule  # TODO: Pass dataset cfg to all so we can remove partial
+    else:
         raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
-    
+
     datamodule = dm(
         root=data_root,
         batch_size=cfg.training.batch_size,
@@ -87,7 +93,7 @@ def main(cfg):
         num_workers=cfg.resources.num_workers,
         dataset_cfg=cfg.dataset,
     )
-    
+
     ######################################################################
     # Create the network(s) which will be trained by the Training Module.
     # The network should (ideally) be lightning-independent. This allows
@@ -121,18 +127,23 @@ def main(cfg):
     ######################################################################
 
     datamodule.setup(stage="fit")
-    cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
+    cfg.training.num_training_steps = (
+        len(datamodule.train_dataloader()) * cfg.training.epochs
+    )
     # updating the training sample size
     # cfg.training.training_sample_size = cfg.dataset.sample_size
 
     if "scene" in cfg.dataset and cfg.dataset.scene:
         if cfg.model.type != "flow":
-            raise ValueError("Scene-based training cannot be used with cross-type models.")
-        cfg.training.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
+            raise ValueError(
+                "Scene-based training cannot be used with cross-type models."
+            )
+        cfg.training.sample_size = (
+            cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
+        )
     else:
         cfg.training.sample_size = cfg.dataset.sample_size_action
         cfg.training.sample_size_anchor = cfg.dataset.sample_size_anchor
-    
 
     # override the task type here based on the dataset
     if "cloth" in cfg.dataset.type:
@@ -141,15 +152,19 @@ def main(cfg):
         cfg.task_type = "rigid"
     else:
         raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
-    
 
     if cfg.model.type in ["flow", "flow_cross"]:
-        model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
+        model = FlowPredictionTrainingModule(
+            network, training_cfg=cfg.training, model_cfg=cfg.model
+        )
     elif cfg.model.type in ["point_cross"]:
         model = PointPredictionTrainingModule(
-            network, task_type=cfg.task_type, training_cfg=cfg.training, model_cfg=cfg.model
+            network,
+            task_type=cfg.task_type,
+            training_cfg=cfg.training,
+            model_cfg=cfg.model,
         )
-    
+
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)
 
@@ -166,7 +181,7 @@ def main(cfg):
         group = "experiment-" + id
     else:
         group = cfg.wandb.group
-    
+
     logger = WandbLogger(
         entity=cfg.wandb.entity,
         project=cfg.wandb.project,
@@ -218,14 +233,15 @@ def main(cfg):
                 save_weights_only=False,
                 save_last=True,
             ),
-            # ModelCheckpoint(
-            #     dirpath=cfg.lightning.checkpoint_dir,
-            #     filename="{epoch}-{step}-{val_wta_rmse_0:.3f}",
-            #     monitor="val_wta_rmse_0",
-            #     mode="min",
-            #     save_weights_only=False,
-            #     save_last=False,
-            # )
+            ModelCheckpoint(
+                dirpath=cfg.lightning.checkpoint_dir,
+                filename="{epoch}-{step}-{val_wta/rmse:.3f}",
+                monitor="val_wta/rmse",
+                mode="min",
+                save_weights_only=False,
+                save_last=False,
+                auto_insert_metric_name=False,
+            ),
             # This checkpoint will get saved to WandB. The Callback mechanism in lightning is poorly designed, so we have to put it last.
             # ModelCheckpoint(
             #     dirpath=cfg.lightning.checkpoint_dir,
@@ -235,7 +251,7 @@ def main(cfg):
             #     save_weights_only=True,
             # ),
         ],
-        # num_sanity_val_steps=0,
+        num_sanity_val_steps=0,
     )
 
     ######################################################################
@@ -260,7 +276,9 @@ def main(cfg):
 
     # this might be a little too "pythonic"
     if cfg.checkpoint.run_id:
-        print("Attempting to resume training from checkpoint: ", cfg.checkpoint.reference)
+        print(
+            "Attempting to resume training from checkpoint: ", cfg.checkpoint.reference
+        )
 
         api = wandb.Api()
         artifact_dir = cfg.wandb.artifact_dir

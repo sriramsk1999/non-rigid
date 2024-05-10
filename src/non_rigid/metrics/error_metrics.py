@@ -1,3 +1,4 @@
+from non_rigid.utils.vis_utils import plot_multi_np
 import numpy as np
 from pytorch3d.transforms import Transform3d, Rotate, Translate
 from scipy.spatial.transform import Rotation as R
@@ -96,8 +97,8 @@ def get_rigid_available_pose_errors(
         dict: dictionary of min. rigid errors
     """
     required_keys = [
-        "pc_action_mean",
-        "pc_anchor_mean",
+        "goal_action_center",
+        "scene_center",
         "rpdiff_obj_mesh_file",
         "rpdiff_saved_poses_path",
         "rpdiff_obj_final_obj_pose",
@@ -107,8 +108,10 @@ def get_rigid_available_pose_errors(
         key in batch for key in required_keys
     ), f"Missing some required keys in batch. Required = {required_keys}"
 
-    T0 = Transform3d(matrix=batch['T0'])
-    T1 = Transform3d(matrix=batch['T1'])
+    device = batch["pc"].device
+
+    T0 = Transform3d(matrix=batch["T0"].permute(0, 2, 1)).to(device)
+    T1 = Transform3d(matrix=batch["T1"].permute(0, 2, 1)).to(device)
 
     multi_obj_mesh_file = batch["rpdiff_obj_mesh_file"]
     parent_fnames = multi_obj_mesh_file["parent"][0]
@@ -124,8 +127,10 @@ def get_rigid_available_pose_errors(
     child_final_poses = torch.stack(child_final_poses).permute(1, 0, 2)
 
     # Get the mean of the original points
-    points_action_means = batch["pc_action_mean"]
-    points_anchor_means = batch["pc_anchor_mean"]
+    goal_action_center = batch["goal_action_center"].to(device)
+    scene_center = batch["scene_center"].to(device)
+
+    pc_scale_factor = batch["rpdiff_pcd_scale_factor"].to(device)
 
     batch_min_dists = []
     for batch_idx in range(len(parent_fnames)):
@@ -141,58 +146,73 @@ def get_rigid_available_pose_errors(
             child_final_pose.squeeze(-1).detach().cpu().numpy()
         )
 
-        # Extract rotation and translation, by default mat. rotation component is the inverse of the actual rotation
-        parent_final_pose_rot = parent_final_pose_mat[:3, :3]
-        parent_final_pose_rot_tf = Rotate(torch.Tensor(parent_final_pose_rot)).to(
-            batch["pc_action"].device
+        # Get parent final pose as Transform3d
+        parent_final_pose_rot = torch.Tensor(parent_final_pose_mat[:3, :3]).to(device)
+        parent_final_pose_rot_tf = Rotate(parent_final_pose_rot).to(device)
+
+        parent_final_pose_translation = (
+            torch.Tensor(parent_final_pose_mat[:3, 3]).to(device)
+            * pc_scale_factor[batch_idx]
         )
-        parent_final_pose_translation = parent_final_pose_mat[:3, 3]
         parent_final_pose_translation_tf = Translate(
-            torch.Tensor(-parent_final_pose_translation).unsqueeze(0)
-        ).to(batch["pc_action"].device)
+            -parent_final_pose_translation.unsqueeze(0)
+        ).to(device)
 
-        child_final_pose_rot = child_final_pose_mat[:3, :3]
-        child_final_pose_rot_tf = Rotate(torch.Tensor(child_final_pose_rot)).to(
-            batch["pc_action"].device
+        # Get child final pose as Transform3d
+        child_final_pose_rot = torch.Tensor(child_final_pose_mat[:3, :3]).to(device)
+        child_final_pose_rot_tf = Rotate(child_final_pose_rot).to(device)
+
+        child_final_pose_translation = (
+            torch.Tensor(child_final_pose_mat[:3, 3]).to(device)
+            * pc_scale_factor[batch_idx]
         )
-        child_final_pose_translation = child_final_pose_mat[:3, 3]
         child_final_pose_translation_tf = Translate(
-            torch.Tensor(-child_final_pose_translation).unsqueeze(0)
-        ).to(batch["pc_action"].device)
+            -child_final_pose_translation.unsqueeze(0)
+        ).to(device)
 
+        # By default the action/anchor points are centered about the anchor mean
+        translate_to_scene_center = Translate(-scene_center[batch_idx].unsqueeze(0)).to(
+            device
+        )
+
+        ####################################################################################
+        # Parent Final to Trans Anchor frame
+        ####################################################################################
         # Compose the transform from the parent final frame (parent in world frame) to the parent frame
         parent_final_pose_inv_tf = parent_final_pose_translation_tf.compose(
             parent_final_pose_rot_tf
         )
-
-        # Compose the transform from the child final frame (child in world frame) to the child frame
-        child_final_pose_inv_tf = child_final_pose_translation_tf.compose(
-            child_final_pose_rot_tf
-        )
-
-        # By default the action/anchor points are centered about the anchor mean
-        translate_to_action_mean = Translate(
-            -points_anchor_means[batch_idx].unsqueeze(0)
-        ).to(batch["pc_action"].device)
-
-        # Transform pose from parent frame to parent final frame (parent in world frame), then to anchor frame (centered about action mean)
+        # Transform pose from parent frame to parent final frame (parent in world frame), then to anchor frame (centered about anchor mean)
         parent_pose_to_anchor_frame = parent_final_pose_inv_tf.inverse().compose(
-            translate_to_action_mean
+            translate_to_scene_center
         )
-
-        # Transform pose from child frame to child final frame (child in world frame), then to anchor frame (centered about action mean)
-        child_pose_to_anchor_frame = child_final_pose_inv_tf.inverse().compose(
-            translate_to_action_mean
-        )
-
         # Transform pose from anchor frame to anchor trans frame
         parent_pose_to_trans_anchor_frame = parent_pose_to_anchor_frame.compose(
             T1[batch_idx]
         )
 
+        ####################################################################################
+        # Child Final to Trans Anchor frame
+        ####################################################################################
+        # Compose the transform from the child final frame (child in world frame) to the child frame
+        child_final_pose_inv_tf = child_final_pose_translation_tf.compose(
+            child_final_pose_rot_tf
+        )
+
+        # Transform pose from child frame to child final frame (child in world frame), then to anchor frame (centered about anchor mean)
+        child_pose_to_anchor_frame = child_final_pose_inv_tf.inverse().compose(
+            translate_to_scene_center
+        )
+
+        translate_to_goal_action_center = Translate(
+            -goal_action_center[batch_idx].unsqueeze(0)
+        ).to(device)
+
         # Get the predicted child pose in the trans anchor frame
-        child_pred_pose = child_pose_to_anchor_frame.compose(T0[batch_idx]).compose(
-            T_pred[batch_idx]
+        child_pred_pose = (
+            child_pose_to_anchor_frame.compose(translate_to_goal_action_center)
+            .compose(T0[batch_idx])
+            .compose(T_pred[batch_idx])
         )
 
         if (
@@ -205,51 +225,47 @@ def get_rigid_available_pose_errors(
             loaded_poses = [matrix_from_list(pose) for pose in loaded_poses]
 
             # get avail poses in the trans anchor frame
-            avail_poses_trans_anchor_frame_base = [
-                np.matmul(
+            avail_poses_trans_anchor_frame_base = []
+            for pose in loaded_poses:
+                pose_transf = pose[:-1, -1] * pc_scale_factor[batch_idx].cpu().numpy()
+                pose_rot = pose[:-1, :-1]
+                pose_ = np.eye(4)
+                pose_[:-1, -1] = pose_transf
+                pose_[:-1, :-1] = pose_rot
+                
+                trans_pose_ = np.matmul(
                     parent_pose_to_trans_anchor_frame.get_matrix()
                     .squeeze(0)
                     .T.detach()
                     .cpu()
                     .numpy(),
-                    pose,
+                    pose_,
                 )
-                for pose in loaded_poses
-            ]
+                
+                avail_poses_trans_anchor_frame_base.append(trans_pose_)
 
             avail_poses_trans_anchor_frame = []
             for p_idx, pose in enumerate(avail_poses_trans_anchor_frame_base):
                 # get all four orientations that work
                 r1 = R.from_euler("xyz", [0, 0, 0]).as_matrix()
                 r2 = R.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
-                # r3 = R.from_euler('xyz', [0, 0, np.pi]).as_matrix()
-                # r4 = R.from_euler('xyz', [np.pi, 0, np.pi]).as_matrix()
                 r5 = R.from_euler("xyz", [0, np.pi, 0]).as_matrix()
                 r6 = R.from_euler("xyz", [np.pi, np.pi, 0]).as_matrix()
-                # r7 = R.from_euler('xyz', [0, np.pi, np.pi]).as_matrix()
-                # r8 = R.from_euler('xyz', [np.pi, np.pi, np.pi]).as_matrix()
 
                 tf1 = np.eye(4)
                 tf1[:-1, :-1] = r1
                 tf2 = np.eye(4)
                 tf2[:-1, :-1] = r2
-                # tf3 = np.eye(4); tf3[:-1, :-1] = r3
-                # tf4 = np.eye(4); tf4[:-1, :-1] = r4
                 tf5 = np.eye(4)
                 tf5[:-1, :-1] = r5
                 tf6 = np.eye(4)
                 tf6[:-1, :-1] = r6
-                # tf7 = np.eye(4); tf7[:-1, :-1] = r7
-                # tf8 = np.eye(4); tf8[:-1, :-1] = r8
 
                 p1 = np.matmul(pose, tf1)
                 p2 = np.matmul(pose, tf2)
-                # p3 = np.matmul(pose, tf3)
-                # p4 = np.matmul(pose, tf4)
                 p5 = np.matmul(pose, tf5)
                 p6 = np.matmul(pose, tf6)
-                # p7 = np.matmul(pose, tf7)
-                # p8 = np.matmul(pose, tf8)
+
 
                 # all_poses_to_save = [p1, p2, p3, p4, p5, p6, p7, p8]
                 all_poses_to_save = [p1, p2, p5, p6]
@@ -300,55 +316,39 @@ def get_rigid_available_pose_errors(
                 base_pose[2, -1] += action_h / 2
                 base_poses.append(base_pose)
 
-            # get avail poses in the trans anchor frame
-            avail_poses_trans_anchor_frame_base = [
-                np.matmul(
+            avail_poses_trans_anchor_frame_base = []
+            for pose in base_poses:
+                pose_transf = pose[:-1, -1] * pc_scale_factor[batch_idx].cpu().numpy()
+                pose_rot = pose[:-1, :-1]
+                pose_ = np.eye(4)
+                pose_[:-1, -1] = pose_transf
+                pose_[:-1, :-1] = pose_rot
+                
+                trans_pose_ = np.matmul(
                     parent_pose_to_trans_anchor_frame.get_matrix()
                     .squeeze(0)
                     .T.detach()
                     .cpu()
                     .numpy(),
-                    pose,
+                    pose_,
                 )
-                for pose in base_poses
-            ]
+                
+                avail_poses_trans_anchor_frame_base.append(trans_pose_)
 
             avail_poses_trans_anchor_frame = []
             for p_idx, pose in enumerate(avail_poses_trans_anchor_frame_base):
                 # get all orientations that work
                 r1 = R.from_euler("xyz", [0, 0, 0]).as_matrix()
                 r2 = R.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
-                # r3 = R.from_euler('xyz', [0, 0, np.pi]).as_matrix()
-                # r4 = R.from_euler('xyz', [np.pi, 0, np.pi]).as_matrix()
-                # r5 = R.from_euler('xyz', [0, np.pi, 0]).as_matrix()
-                # r6 = R.from_euler('xyz', [np.pi, np.pi, 0]).as_matrix()
-                # r7 = R.from_euler('xyz', [0, np.pi, np.pi]).as_matrix()
-                # r8 = R.from_euler('xyz', [np.pi, np.pi, np.pi]).as_matrix()
 
                 tf1 = np.eye(4)
                 tf1[:-1, :-1] = r1
                 tf2 = np.eye(4)
                 tf2[:-1, :-1] = r2
-                # tf3 = np.eye(4); tf3[:-1, :-1] = r3
-                # tf4 = np.eye(4); tf4[:-1, :-1] = r4
-                # tf5 = np.eye(4); tf5[:-1, :-1] = r5
-                # tf6 = np.eye(4); tf6[:-1, :-1] = r6
-                # tf7 = np.eye(4); tf7[:-1, :-1] = r7
-                # tf8 = np.eye(4); tf8[:-1, :-1] = r8
 
                 p1 = np.matmul(pose, tf1)
                 p2 = np.matmul(pose, tf2)
-                # p3 = np.matmul(pose, tf3)
-                # p4 = np.matmul(pose, tf4)
-                # p5 = np.matmul(pose, tf5)
-                # p6 = np.matmul(pose, tf6)
-                # p7 = np.matmul(pose, tf7)
-                # p8 = np.matmul(pose, tf8)
 
-                # avail_poses_trans_anchor_frame.append(p1)
-                # avail_poses_trans_anchor_frame.append(p2)
-
-                # all_poses_to_save = [p1, p2, p3, p4, p5, p6, p7, p8]
                 all_poses_to_save = [p1, p2]
 
                 for p_to_save in all_poses_to_save:
@@ -389,18 +389,8 @@ def get_rigid_available_pose_errors(
 
             trans_ = np.linalg.norm(child_pred_pose_trans - pose_trans, axis=-1)
 
-            # q_child_pred = R.from_matrix(child_pred_pose_rot).as_quat()
-            # q_pose = R.from_matrix(pose_rot).as_quat()
-
-            # quat_scalar_prod = np.sum(q_child_pred * q_pose)
-            # rot_ = 1 - quat_scalar_prod**2
-
-            rot_child_pred = Rotate(torch.Tensor(child_pred_pose_rot.T)).to(
-                batch["pc_action"].device
-            )
-            rot_pose = Rotate(torch.Tensor(pose_rot.T)).to(
-                batch["pc_action"].device
-            )
+            rot_child_pred = Rotate(torch.Tensor(child_pred_pose_rot.T)).to(device)
+            rot_pose = Rotate(torch.Tensor(pose_rot.T)).to(device)
             _, _, rot_ = get_degree_angle(rot_pose.compose(rot_child_pred.inverse()))
 
             # Find the available pose thats closest to the T_pred (in terms of translation)

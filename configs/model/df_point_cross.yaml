@@ -15,5 +15,3 @@ diff_train_steps: 100
 diff_inference_steps: 100
 diff_noise_schedule: linear
 diff_noise_scale: 1.0
-
-
