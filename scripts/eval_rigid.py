@@ -70,8 +70,10 @@ def main(cfg):
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
     if cfg.dataset.type == "cloth":
         dm = ProcClothFlowDataModule
-    elif cfg.dataset.type in ["rigid_point", "rigid_flow"]:
+    elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point"]:
         dm = partial(RigidDataModule, dataset_cfg=cfg.dataset) # TODO: Remove the need to use partial
+    else:
+        raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
 
     datamodule = dm(
         root=data_root,
@@ -152,11 +154,11 @@ def main(cfg):
     #     val_dataset = RigidFlowDataset(data_root, "val", dataset_cfg=cfg.dataset)
 
     MMD_METRICS = False
-    PRECISION_METRICS = False
+    PRECISION_METRICS = True
     VISUALIZE_ALL = False
     VISUALIZE_SINGLE = False
     VISUALIZE_EVAL_SINGLE = True
-    VISUALIZE_SINGLE_IDX = 8
+    VISUALIZE_SINGLE_IDX = 4
     
     SHOW_FIG = True
     SAVE_FIG = False
