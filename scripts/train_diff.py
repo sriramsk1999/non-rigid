@@ -61,8 +61,9 @@ def main(cfg):
 
     if cfg.dataset.type in ["articulated", "articulated_multi"]:
         dm = MicrowaveFlowDataModule
-    elif cfg.dataset.type == "cloth":
+    elif cfg.dataset.type in ["cloth", "cloth_point"]:
         dm = ProcClothFlowDataModule
+        # determine type based on model type
     elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point"]:
         dm = partial(RigidDataModule, dataset_cfg=cfg.dataset) # TODO: Pass dataset cfg to all so we can remove partial
     else: 
@@ -113,7 +114,7 @@ def main(cfg):
     # updating the training sample size
     # cfg.training.training_sample_size = cfg.dataset.sample_size
 
-    if "type_args" in cfg.dataset and cfg.dataset.type_args.scene:
+    if "scene" in cfg.dataset and cfg.dataset.scene:
         if cfg.model.type != "flow":
             raise ValueError("Scene-based training cannot be used with cross-type models.")
         cfg.training.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
@@ -122,10 +123,21 @@ def main(cfg):
         cfg.training.sample_size_anchor = cfg.dataset.sample_size_anchor
     
 
+    # override the task_type here based on the datset
+    if "cloth" in cfg.dataset.type:
+        cfg.task_type = "cloth"
+    elif "rigid" in cfg.dataset.type:
+        cfg.task_type = "rigid"
+    else:
+        raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
+    
+
     if cfg.model.type in ["flow", "flow_cross"]:
         model = FlowPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
     elif cfg.model.type in ["point_cross"]:
-        model = PointPredictionTrainingModule(network, training_cfg=cfg.training, model_cfg=cfg.model)
+        model = PointPredictionTrainingModule(
+            network, task_type=cfg.task_type, training_cfg=cfg.training, model_cfg=cfg.model
+        )
     
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)

@@ -10,4 +10,5 @@ sample_size: None # Set by the training loop, from dataset config.
 sample_size_anchor: None # Set by the training loop, from dataset config.
 
 check_val_every_n_epochs: 200
-num_wta_trials: 50
+num_wta_trials: 20
+additional_train_logging_period: 1000 # Global step period to log additional training metrics

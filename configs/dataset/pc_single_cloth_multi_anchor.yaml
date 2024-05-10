@@ -7,5 +7,6 @@ sample_size_action: 213
 # sample_size_anchor: 1381
 sample_size_anchor: 512
 downsample_type: fps
-type_args:
-  scene: True
+scene: True
+# type_args:
+#   scene: True

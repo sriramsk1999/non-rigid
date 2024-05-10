@@ -87,28 +87,19 @@ class FlowPredictionTrainingModule(L.LightningModule):
             diffusion_steps=self.diff_train_steps,
         )
 
-    def forward(self, batch, t, mode="train"):
-        if self.model_cfg.type == "flow":
-            # get flow and pos
-            pos = batch["pc"].permute(0, 2, 1)  # channel first
-            flow = batch["flow"].permute(0, 2, 1)  # channel first
+    def forward(self, batch, t, mode="train"):       
+        pc_action = batch["pc_action"].permute(0, 2, 1)  # channel first
+        flow = batch["flow"].permute(0, 2, 1)  # channel first
+        model_kwargs = dict(x0=pc_action)
+        # if cross attention, pass in additional data
+        if self.model_cfg.type == "flow_cross":
+            pc_anchor = batch["pc_anchor"].permute(0, 2, 1)
+            model_kwargs["y"] = pc_anchor
 
-            # Setup additional data required by the model
-            model_kwargs = dict(pos=pos)
-
-        # If we are doing cross attention, we need to pass in additional data
-        elif self.model_cfg.type == "flow_cross":
-            pos = batch["pc"].permute(0, 2, 1)  # channel first
-            pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # channel first
-            flow = batch["flow"].permute(0, 2, 1)  # channel first
-            
-            model_kwargs = dict(
-                y=pc_anchor,  # Pass original anchor point cloud
-                x0=pos,  # Pass starting action point cloud
-            )
-        
         # run diffusion
-        loss_dict = self.diffusion.training_losses(self.network, flow, t, model_kwargs)
+        loss_dict = self.diffusion.training_losses(
+            self.network, flow, t, model_kwargs
+        )
         loss = loss_dict["loss"].mean()
         self.log_dict(
             {
@@ -149,70 +140,40 @@ class FlowPredictionTrainingModule(L.LightningModule):
         return model_kwargs, pred_flow, results
 
     def predict_wta(self, batch, mode):
-        if self.model_cfg.type == "flow":
-            pos = batch["pc"].to(self.device)
-            gt_flow = batch["flow"].to(self.device)
-            seg = batch["seg"].to(self.device)
-            mask = True
-            
-            # reshaping and expanding for winner-take-all
-            bs = pos.shape[0]
-            gt_flow = (
-                gt_flow.unsqueeze(1)
-                .expand(-1, self.num_wta_trials, -1, -1)
-                .reshape(bs * self.num_wta_trials, self.sample_size, -1)
-            )
-            seg = (
-                seg.unsqueeze(1)
-                .expand(-1, self.num_wta_trials, -1)
-                .reshape(bs * self.num_wta_trials, -1)
-            )
-            pos = (
-                pos.transpose(-1, -2)
-                .unsqueeze(1)
-                .expand(-1, self.num_wta_trials, -1, -1)
-                .reshape(bs * self.num_wta_trials, -1, self.sample_size)
-            )
-            
-            model_kwargs = dict(pos=pos)
-        elif self.model_cfg.type == "flow_cross":
-            pos = batch["pc"].to(self.device)
+        pc_action = batch["pc_action"].to(self.device)
+        gt_flow = batch["flow"].to(self.device)
+        seg = batch["seg"].to(self.device) # TODO: Rigid dataset doesn't have this
+        mask = True
+        # reshaping and expanding for winner-take-all
+        bs = pc_action.shape[0]
+        pc_action = (
+            pc_action.transpose(-1, -2)
+            .unsqueeze(1)
+            .expand(-1, self.num_wta_trials, -1, -1)
+            .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+        )
+        gt_flow = (
+            gt_flow.unsqueeze(1)
+            .expand(-1, self.num_wta_trials, -1, -1)
+            .reshape(bs * self.num_wta_trials, self.sample_size, -1)
+        )
+        seg = (
+            seg.unsqueeze(1)
+            .expand(-1, self.num_wta_trials, -1)
+            .reshape(bs * self.num_wta_trials, -1)
+        )
+        model_kwargs = dict(x0=pc_action)
+        # if cross attention, pass in additional data
+        if self.model_cfg.type == "flow_cross":
             pc_anchor = batch["pc_anchor"].to(self.device)
-            gt_flow = batch["flow"].to(self.device)
-            # seg = None # TODO Rigid dataset doesnt have this
-            seg = batch["seg"].to(self.device)
-            mask = True
-            
-            # reshaping and expanding for winner-take-all
-            bs = pos.shape[0]
-            gt_flow = (
-                gt_flow.unsqueeze(1)
-                .expand(-1, self.num_wta_trials, -1, -1)
-                .reshape(bs * self.num_wta_trials, self.sample_size, -1)
-            )
-            pos = (
-                pos.transpose(-1, -2)
-                .unsqueeze(1)
-                .expand(-1, self.num_wta_trials, -1, -1)
-                .reshape(bs * self.num_wta_trials, -1, self.sample_size)
-            )
-            seg = (
-                seg.unsqueeze(1)
-                .expand(-1, self.num_wta_trials, -1)
-                .reshape(bs * self.num_wta_trials, -1)
-            )
             pc_anchor = (
                 pc_anchor.transpose(-1, -2)
                 .unsqueeze(1)
                 .expand(-1, self.num_wta_trials, -1, -1)
                 .reshape(bs * self.num_wta_trials, -1, self.sample_size_anchor)
             )
-            
-            model_kwargs = dict(
-                y=pc_anchor,  # Pass original anchor point cloud
-                x0=pos,  # Pass starting action point cloud
-            )
-        
+            model_kwargs["y"] = pc_anchor
+
         # generating diffusion predictions
         model_kwargs, pred_flow, results = self.predict(bs, model_kwargs, self.num_wta_trials, unflatten=False)
         # computing wta errors
@@ -228,7 +189,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_flows_wta = pred_flow[torch.arange(bs), winner]
-        return pred_flows_wta, cos_sim_wta, rmse_wta
+        return pred_flows_wta, pred_flow, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(
@@ -242,19 +203,81 @@ class FlowPredictionTrainingModule(L.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def training_step(self, batch, batch_idx):
-        self.train()  # what is this line doing?
+        self.train()
         t = torch.randint(
             0, self.diff_train_steps, (self.batch_size,), device=self.device
         ).long()
         _, loss = self(batch, t, "train")
+        #########################################################
+        # Logging
+        #########################################################
+        self.log_dict(
+            {
+                f"train/loss": loss,
+            },
+            add_dataloader_idx=False,
+            prog_bar=True,
+        )
+
+        # Determine if additional logging should be done
+        do_additional_logging = (
+            self.global_step % self.training_cfg.additional_train_logging_period == 0
+        )
+
+        # Additional logging
+        if do_additional_logging:
+            pred_flows_wta, pred_flows, cos_sim_wta, rmse_wta = self.predict_wta(
+                batch, mode="val"
+            )
+
+            self.log_dict(
+                {
+                    f"train_wta/cos_sim": cos_sim_wta.mean(),
+                    f"train_wta/rmse": rmse_wta.mean(),
+                },
+                add_dataloader_idx=False,
+                prog_bar=True,
+            )
+
+        #########################################################
+        # Visualization
+        #########################################################
+        # Additional visualization
+        if do_additional_logging:
+            viz_idx = np.random.randint(0, batch["pc"].shape[0])
+
+            pc_pos_viz = batch["pc"][viz_idx, :, :3]
+            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+            pred_flows_wta_viz = pred_flows_wta[viz_idx, :, :3]
+            pred_action_wta_viz = pc_action_viz + pred_flows_wta_viz
+            viz_args = {
+                "pc_pos_viz": pc_pos_viz,
+                "pc_action_viz": pc_action_viz,
+                "pred_action_viz": pred_action_wta_viz,
+            }
+            # if cross attention, pass in additional data
+            if self.model_cfg.type == "flow_cross":
+                pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
+                viz_args["pc_anchor_viz"] = pc_anchor_viz
+            predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
+            wandb.log({"train_wta/predicted_vs_gt": predicted_vs_gt_wta})
+
+            pred_flows_viz = pred_flows[viz_idx, 0, :, :3]
+            viz_args["pred_action_viz"] = pc_action_viz + pred_flows_viz
+            predicted_vs_gt = viz_predicted_vs_gt(**viz_args)
+            wandb.log({"train/predicted_vs_gt": predicted_vs_gt})
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
         with torch.no_grad():
-            pred_flows_wta, cos_sim_wta, rmse_wta = self.predict_wta(
+            pred_flows_wta, pred_flows, cos_sim_wta, rmse_wta = self.predict_wta(
                 batch, mode="val"
-            ) 
+            )
+
+        #########################################################
+        # Logging
+        #########################################################
         self.log_dict(
             {
                 f"val_wta_cos_sim_{dataloader_idx}": cos_sim_wta.mean(),
@@ -263,76 +286,34 @@ class FlowPredictionTrainingModule(L.LightningModule):
             add_dataloader_idx=False,
             prog_bar=True,
         )
-        
+        #########################################################
+        # Visualization
+        #########################################################
+
         # visualizing predicted vs ground truth
-        if self.model_cfg.type == "flow":
-            viz_idx = np.random.randint(0, batch["pc"].shape[0])
+        viz_idx = np.random.randint(0, batch["pc"].shape[0])
 
-            pc_pos_viz = batch["pc"][viz_idx, :, :3]
-            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
-
-            pred_flows_viz = pred_flows_wta[viz_idx, :, :3]
-            pred_action_wta_viz = pc_pos_viz + pred_flows_viz
-
-            pc_viz_min = pc_action_viz.min(dim=0).values
-            pc_viz_max = pc_action_viz.max(dim=0).values
-            pc_viz_extent = pc_viz_max - pc_viz_min
-            pred_action_wta_viz = pred_action_wta_viz[
-                (
-                    pred_action_wta_viz[:, 0]
-                    > pc_viz_min[0] - 0.5 * pc_viz_extent[0]
-                )
-                & (
-                    pred_action_wta_viz[:, 0]
-                    < pc_viz_max[0] + 0.5 * pc_viz_extent[0]
-                )
-                & (
-                    pred_action_wta_viz[:, 1]
-                    > pc_viz_min[1] - 0.5 * pc_viz_extent[1]
-                )
-                & (
-                    pred_action_wta_viz[:, 1]
-                    < pc_viz_max[1] + 0.5 * pc_viz_extent[1]
-                )
-                & (
-                    pred_action_wta_viz[:, 2]
-                    > pc_viz_min[2] - 0.5 * pc_viz_extent[2]
-                )
-                & (
-                    pred_action_wta_viz[:, 2]
-                    < pc_viz_max[2] + 0.5 * pc_viz_extent[2]
-                )
-            ]
-            predicted_vs_gt_wta_tensors = [
-                pc_action_viz,
-                pred_action_wta_viz,
-            ]
-            predicted_vs_gt_wta_colors = ["green", "blue"]
-            predicted_vs_gt_wta = get_color(
-                tensor_list=predicted_vs_gt_wta_tensors,
-                color_list=predicted_vs_gt_wta_colors,
-            )
-            wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": wandb.Object3D(predicted_vs_gt_wta)})
-
+        pc_pos_viz = batch["pc"][viz_idx, :, :3]
+        pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+        pred_flows_wta_viz = pred_flows_wta[viz_idx, :, :3]
+        pred_action_wta_viz = pc_action_viz + pred_flows_wta_viz
+        viz_args = {
+            "pc_pos_viz": pc_pos_viz,
+            "pc_action_viz": pc_action_viz,
+            "pred_action_viz": pred_action_wta_viz,
+        }
+        # if cross attention, pass in additional data
         if self.model_cfg.type == "flow_cross":
-            # Choose random example to visualize
-            viz_idx = np.random.randint(0, batch["pc"].shape[0])
-
-            pc_pos_viz = batch["pc"][viz_idx, :, :3]
-            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
             pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
-            pred_flows_viz = pred_flows_wta[viz_idx, :, :3]
-            pred_action_wta_viz = pc_pos_viz + pred_flows_viz
-            
-            # Get predicted vs. ground truth visualization            
-            predicted_vs_gt_wta = viz_predicted_vs_gt(
-                pc_pos_viz=pc_pos_viz,
-                pc_action_viz=pc_action_viz,
-                pc_anchor_viz=pc_anchor_viz,
-                pred_action_viz=pred_action_wta_viz,
-            )
-            wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": wandb.Object3D(predicted_vs_gt_wta)})
-            
+            viz_args["pc_anchor_viz"] = pc_anchor_viz
+        predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
+        wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt_wta})
+
+        pred_flows_viz = pred_flows[viz_idx, 0, :, :3]
+        viz_args["pred_action_viz"] = pc_action_viz + pred_flows_viz
+        predicted_vs_gt = viz_predicted_vs_gt(**viz_args)
+        wandb.log({f"val/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt})
+
         return {
             "loss": rmse_wta,
             "cos_sim": cos_sim_wta,
@@ -471,11 +452,13 @@ class PointPredictionTrainingModule(L.LightningModule):
     def __init__(
         self,
         network: DiffusionFlowBase,
+        task_type: str,
         training_cfg: omegaconf.DictConfig,
         model_cfg: omegaconf.DictConfig,
     ) -> None:
         super().__init__()
         self.network = network
+        self.task_type = task_type
         self.training_cfg = training_cfg
         self.model_cfg = model_cfg
 
@@ -489,7 +472,8 @@ class PointPredictionTrainingModule(L.LightningModule):
         # TODO: organize these params by description
         self.batch_size = training_cfg.batch_size
         self.val_batch_size = training_cfg.val_batch_size
-        self.sample_size = training_cfg.training_sample_size
+        self.sample_size = training_cfg.sample_size
+        self.sample_size_anchor = training_cfg.sample_size_anchor
         self.diff_train_steps = model_cfg.diff_train_steps
         self.num_wta_trials = training_cfg.num_wta_trials
 
@@ -584,14 +568,13 @@ class PointPredictionTrainingModule(L.LightningModule):
             pc_anchor.transpose(-1, -2)
             .unsqueeze(1)
             .expand(-1, self.num_wta_trials, -1, -1)
-            .reshape(bs * self.num_wta_trials, -1, self.sample_size)
+            .reshape(bs * self.num_wta_trials, -1, self.sample_size_anchor)
         )
 
         model_kwargs = dict(
             y=pc_anchor,
             x0=pc_action,
         )
-
         # generating diffusion predictions
         model_kwargs, pred_action, results = self.predict(
             bs, model_kwargs, self.num_wta_trials, unflatten=False
@@ -624,12 +607,11 @@ class PointPredictionTrainingModule(L.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def training_step(self, batch, batch_idx):
-        self.train()  # what is this line doing?
+        self.train()
         t = torch.randint(
             0, self.diff_train_steps, (self.batch_size,), device=self.device
         ).long()
         _, loss = self(batch, t, "train")
-
         #########################################################
         # Logging
         #########################################################
@@ -661,30 +643,31 @@ class PointPredictionTrainingModule(L.LightningModule):
                 prog_bar=True,
             )
 
-            # Get prediction error
-            start_xyz = batch["pc_action"]
-            pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
-            T_action2goal = batch["T_action2goal"]
-            T_action2distractor_list = (
-                batch["T_action2distractor_list"]
-                if "T_action2distractor_list" in batch
-                else None
-            )
-            errors = get_pred_pcd_rigid_errors(
-                start_xyz=start_xyz,
-                pred_xyz=pred_xyz,
-                T_gt=T_action2goal,
-                T_action2distractor_list=T_action2distractor_list,
-                error_type=self.training_cfg.prediction_error_type,
-            )
-            self.log_dict(
-                {
-                    "train/error_t_mean": errors["error_t_mean"],
-                    "train/error_R_mean": errors["error_R_mean"],
-                },
-                add_dataloader_idx=False,
-                prog_bar=True,
-            )
+            if self.task_type == "rigid":
+                # Get prediction error
+                start_xyz = batch["pc_action"]
+                pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
+                T_action2goal = batch["T_action2goal"]
+                T_action2distractor_list = (
+                    batch["T_action2distractor_list"]
+                    if "T_action2distractor_list" in batch
+                    else None
+                )
+                errors = get_pred_pcd_rigid_errors(
+                    start_xyz=start_xyz,
+                    pred_xyz=pred_xyz,
+                    T_gt=T_action2goal,
+                    T_action2distractor_list=T_action2distractor_list,
+                    error_type=self.training_cfg.prediction_error_type,
+                )
+                self.log_dict(
+                    {
+                        "train/error_t_mean": errors["error_t_mean"],
+                        "train/error_R_mean": errors["error_R_mean"],
+                    },
+                    add_dataloader_idx=False,
+                    prog_bar=True,
+                )
 
         #########################################################
         # Visualization
@@ -730,37 +713,38 @@ class PointPredictionTrainingModule(L.LightningModule):
         #########################################################
         self.log_dict(
             {
-                f"val_wta/cos_sim": cos_sim_wta.mean(),
-                f"val_wta/rmse": rmse_wta.mean(),
+                f"val_wta_cos_sim_{dataloader_idx}": cos_sim_wta.mean(),
+                f"val_wta_rmse_{dataloader_idx}": rmse_wta.mean(),
             },
             add_dataloader_idx=False,
             prog_bar=True,
         )
 
-        # Get prediction error
-        start_xyz = batch["pc_action"]
-        pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
-        T_action2goal = batch["T_action2goal"]
-        T_action2distractor_list = (
-            batch["T_action2distractor_list"]
-            if "T_action2distractor_list" in batch
-            else None
-        )
-        errors = get_pred_pcd_rigid_errors(
-            start_xyz=start_xyz,
-            pred_xyz=pred_xyz,
-            T_gt=T_action2goal,
-            T_action2distractor_list=T_action2distractor_list,
-            error_type=self.training_cfg.prediction_error_type,
-        )
-        self.log_dict(
-            {
-                "val/error_t_mean": errors["error_t_mean"],
-                "val/error_R_mean": errors["error_R_mean"],
-            },
-            add_dataloader_idx=False,
-            prog_bar=True,
-        )
+        if self.task_type == "rigid":
+            # Get prediction error
+            start_xyz = batch["pc_action"]
+            pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
+            T_action2goal = batch["T_action2goal"]
+            T_action2distractor_list = (
+                batch["T_action2distractor_list"]
+                if "T_action2distractor_list" in batch
+                else None
+            )
+            errors = get_pred_pcd_rigid_errors(
+                start_xyz=start_xyz,
+                pred_xyz=pred_xyz,
+                T_gt=T_action2goal,
+                T_action2distractor_list=T_action2distractor_list,
+                error_type=self.training_cfg.prediction_error_type,
+            )
+            self.log_dict(
+                {
+                    "val/error_t_mean": errors["error_t_mean"],
+                    "val/error_R_mean": errors["error_R_mean"],
+                },
+                add_dataloader_idx=False,
+                prog_bar=True,
+            )
 
         #########################################################
         # Visualization
@@ -781,7 +765,7 @@ class PointPredictionTrainingModule(L.LightningModule):
             pc_anchor_viz=pc_anchor_viz,
             pred_action_viz=pred_action_wta_viz,
         )
-        wandb.log({"val_wta/predicted_vs_gt": predicted_vs_gt_wta_viz})
+        wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt_wta_viz})
 
         pred_action_viz = pred_actions[viz_idx, 0, :, :3]
         predicted_vs_gt_viz = viz_predicted_vs_gt(
@@ -790,7 +774,7 @@ class PointPredictionTrainingModule(L.LightningModule):
             pc_anchor_viz=pc_anchor_viz,
             pred_action_viz=pred_action_viz,
         )
-        wandb.log({"val/predicted_vs_gt": predicted_vs_gt_viz})
+        wandb.log({f"val/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt_viz})
 
         return {
             "loss": rmse_wta,
@@ -810,14 +794,3 @@ class PointPredictionTrainingModule(L.LightningModule):
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         # no test for now
         pass
-
-
-if __name__ == "__main__":
-    # test
-    model = DiffusionFlowBase()
-    print(model)
-
-    input = torch.randn(2, 1867, 6)
-    ts = torch.tensor([2, 3])
-    output = model(input, ts)
-    print("Output: ", output.shape)

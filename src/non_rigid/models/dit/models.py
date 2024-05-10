@@ -454,14 +454,19 @@ class DiT_PointCloud_Unc(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(self, x, t, pos):
+    def forward(
+            self, 
+            x: torch.Tensor, 
+            t: torch.Tensor, 
+            x0: torch.Tensor,
+    ) -> torch.Tensor:
         """
         Forward pass of DiT.
         x: (N, L, 3) tensor of spatial inputs (point clouds)
         t: (N,) tensor of diffusion timesteps
         """
         # concat x and pos
-        x = torch.cat((x, pos), dim=1)
+        x = torch.cat((x, x0), dim=1)
         x = torch.transpose(self.x_embedder(x), -1, -2)
         c = self.t_embedder(t)
 
@@ -469,13 +474,6 @@ class DiT_PointCloud_Unc(nn.Module):
             x = block(x, c)
         x = self.final_layer(x, c)
         x = torch.transpose(x, -1, -2)
-        # x = torch.transpose(x, -1, -2)
-        # x = torch.transpose(self.x_embedder(x), -1, -2)
-        # t = self.t_embedder(t)                   # (N, D)
-        # c = t                                    # (N, D)
-        # for block in self.blocks:
-        #     x = block(x, c)                      # (N, L, D)
-        # x = self.final_layer(x, c)               # (N, L, patch_size ** 2 * out_channels)
         return x
 
 
