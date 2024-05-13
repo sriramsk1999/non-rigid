@@ -18,7 +18,7 @@ from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 from typing import Optional
 
 from non_rigid.nets.dgcnn import DGCNN
-
+from non_rigid.models.dit.relative_encoding import RotaryPositionEncoding3D, MultiheadRelativeAttentionWrapper
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -243,6 +243,75 @@ class DiTCrossBlock(nn.Module):
         x = x + gate_x.unsqueeze(1) * self.mlp(
             modulate(self.norm3(x), shift_x, scale_x)
         )
+        return x
+
+
+class DiTRelativeCrossBlock(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning 
+    and 3D relative self attention + 3D relative scene cross attention.
+    """
+
+    def __init__(
+        self, hidden_size: int, num_heads: int, mlp_ratio: float = 4.0, **block_kwargs
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.self_attn = MultiheadRelativeAttentionWrapper(
+            embed_dim=hidden_size, 
+            num_heads=num_heads,
+            dropout=0.0,
+            bias=True
+        )
+        
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.cross_attn = MultiheadRelativeAttentionWrapper(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=0.0,
+            bias=True
+        )
+        
+        self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(
+            in_features=hidden_size,
+            hidden_features=mlp_hidden_dim,
+            act_layer=approx_gelu,
+            drop=0,
+        )
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(), nn.Linear(hidden_size, 9 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, y, c, x_pos=None, y_pos=None):
+        (
+            shift_msa,
+            scale_msa,
+            gate_msa,
+            shift_mca,
+            scale_mca,
+            gate_mca,
+            shift_x,
+            scale_x,
+            gate_x,
+        ) = self.adaLN_modulation(c).chunk(9, dim=1)
+        
+        x = modulate(self.norm1(x), shift_msa, scale_msa)
+        x = x + gate_msa.unsqueeze(1) * self.self_attn(
+            query=x, key=x, value=x, rotary_pe=(x_pos, x_pos)
+        )[0] # [0] is the attention output
+        
+        x = modulate(self.norm2(x), shift_mca, scale_mca)
+        x = x + gate_mca.unsqueeze(1) * self.cross_attn(
+            query=x, key=y, value=y, rotary_pe=(x_pos, y_pos)
+        )[0] # [0] is the attention output
+        
+        x = x + gate_x.unsqueeze(1) * self.mlp(
+            modulate(self.norm3(x), shift_x, scale_x)
+        )
+        
         return x
 
 
@@ -631,6 +700,175 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
 
         for block in self.blocks:
             x = block(x, y_emb, c)
+
+        x = self.final_layer(x, c)
+
+        x = x.permute(0, 2, 1)
+
+        return x
+
+class Rel3D_DiT_PointCloud_Unc_Cross(nn.Module):
+    """
+    Diffusion model with a Transformer backbone - point cloud, unconditional, with scene cross attention, and relative 3D positional encoding and attention.
+    """
+
+    def __init__(
+        self,
+        in_channels=3,
+        hidden_size=1152,
+        depth=28,
+        num_heads=16,
+        mlp_ratio=4.0,
+        learn_sigma=True,
+        model_cfg=None,
+    ):
+        super().__init__()
+        self.learn_sigma = learn_sigma
+        self.in_channels = in_channels
+        # self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.out_channels = 6 if learn_sigma else 3
+        self.num_heads = num_heads
+        self.model_cfg = model_cfg
+
+        self.relative_3d_encoding = RotaryPositionEncoding3D(hidden_size)
+
+        x_encoder_hidden_dims = hidden_size
+        if self.model_cfg.x_encoder is not None and self.model_cfg.x0_encoder is not None:
+            # We are concatenating x and x0 features so we halve the hidden size
+            x_encoder_hidden_dims = hidden_size // 2
+
+        # Encoder for current timestep x features       
+        if self.model_cfg.x_encoder == "mlp":
+            # x_embedder is conv1d layer instead of 2d patch embedder
+            self.x_embedder = nn.Conv1d(
+                in_channels,
+                x_encoder_hidden_dims,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        else:
+            raise ValueError(f"Invalid x_encoder: {self.model_cfg.x_encoder}")
+        
+        # Encoder for y features
+        if self.model_cfg.y_encoder == "mlp":
+            self.y_embedder = nn.Conv1d(
+                in_channels,
+                hidden_size,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        elif self.model_cfg.y_encoder == "dgcnn":
+            self.y_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=hidden_size
+            )
+        else:
+            raise ValueError(f"Invalid y_encoder: {self.model_cfg.y_encoder}")            
+
+        # Encoder for x0 features
+        if self.model_cfg.x0_encoder == "mlp":
+            self.x0_embedder = nn.Conv1d(
+                in_channels,
+                x_encoder_hidden_dims,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
+        elif self.model_cfg.x0_encoder == "dgcnn":
+            self.x0_embedder = DGCNN(
+                input_dims=in_channels, emb_dims=x_encoder_hidden_dims
+            )
+        elif self.model_cfg.x0_encoder is None:
+            pass
+        else:
+            raise ValueError(f"Invalid x0_encoder: {self.model_cfg.x0_encoder}")
+
+        # Timestamp embedding
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        self.blocks = nn.ModuleList(
+            [
+                DiTRelativeCrossBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio)
+                for _ in range(depth)
+            ]
+        )
+        
+        # functionally setting patch size to 1 for a point cloud
+        self.final_layer = FinalLayer(hidden_size, 1, self.out_channels)
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Initialize x_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.x_embedder.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.x_embedder.bias, 0)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # Zero-out adaLN modulation layers in DiT blocks:
+        for block in self.blocks:
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        # Zero-out output layers:
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        y: torch.Tensor,
+        x0: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Forward pass of DiT with scene cross attention.
+
+        Args:
+            x (torch.Tensor): (B, D, N) tensor of batched current timestep x (e.g. noised action) features
+            t (torch.Tensor): (B,) tensor of diffusion timesteps
+            y (torch.Tensor): (B, D, N) tensor of un-noised scene (e.g. anchor) features
+            x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
+        """
+
+        # Get x and y relative 3D positional encoding
+        x_pos = self.relative_3d_encoding(x.permute(0, 2, 1))
+        y_pos = self.relative_3d_encoding(y.permute(0, 2, 1))
+        
+        # Get x and y features        
+        x_emb = self.x_embedder(x)
+
+        if self.model_cfg.x0_encoder is not None:
+            assert x0 is not None, "x0 must be provided if x0_encoder is not None"
+            x0_emb = self.x0_embedder(x0)
+            x_emb = torch.cat((x_emb, x0_emb), dim=1)
+
+        if self.model_cfg.y_encoder is not None:
+            y_emb = self.y_embedder(y)
+            y_emb = y_emb.permute(0, 2, 1)
+
+        x = x_emb.permute(0, 2, 1)
+        
+        c = self.t_embedder(t)
+
+        for i, block in enumerate(self.blocks):
+            x = block(x, y_emb, c, x_pos, y_pos)
 
         x = self.final_layer(x, c)
 

@@ -23,6 +23,7 @@ import wandb
 from non_rigid.models.dit.models import (
     DiT_PointCloud_Unc as DiT_pcu,
     DiT_PointCloud_Unc_Cross,
+    Rel3D_DiT_PointCloud_Unc_Cross
 )
 from non_rigid.models.dit.diffusion import create_diffusion
 from non_rigid.metrics.error_metrics import get_pred_pcd_rigid_errors
@@ -38,19 +39,21 @@ import rpad.visualize_3d.plots as vpl
 def DiT_pcu_S(**kwargs):
     return DiT_pcu(depth=12, hidden_size=384, num_heads=6, **kwargs)
 
-
 def DiT_pcu_xS(**kwargs):
     return DiT_pcu(depth=5, hidden_size=128, num_heads=4, **kwargs)
-
 
 def DiT_pcu_cross_xS(**kwargs):
     return DiT_PointCloud_Unc_Cross(depth=5, hidden_size=128, num_heads=4, **kwargs)
 
+def Rel3D_DiT_pcu_cross_xS(**kwargs):
+    # Embed dim divisible by 3 for 3D positional encoding and divisible by num_heads for multi-head attention
+    return Rel3D_DiT_PointCloud_Unc_Cross(depth=5, hidden_size=132, num_heads=4, **kwargs)
 
 DiT_models = {
     "DiT_pcu_S": DiT_pcu_S,
     "DiT_pcu_xS": DiT_pcu_xS,
     "DiT_pcu_cross_xS": DiT_pcu_cross_xS,
+    "Rel3D_DiT_pcu_cross_xS": Rel3D_DiT_pcu_cross_xS,
 }
 
 
