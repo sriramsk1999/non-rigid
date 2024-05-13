@@ -152,38 +152,14 @@ class FlowPredictionTrainingModule(L.LightningModule):
         mask = True
         # reshaping and expanding for winner-take-all
         bs = pc_action.shape[0]
-        # pc_action = (
-        #     pc_action.transpose(-1, -2)
-        #     .unsqueeze(1)
-        #     .expand(-1, self.num_wta_trials, -1, -1)
-        #     .reshape(bs * self.num_wta_trials, -1, self.sample_size)
-        # )
-        # gt_flow = (
-        #     gt_flow.unsqueeze(1)
-        #     .expand(-1, self.num_wta_trials, -1, -1)
-        #     .reshape(bs * self.num_wta_trials, self.sample_size, -1)
-        # )
-        # seg = (
-        #     seg.unsqueeze(1)
-        #     .expand(-1, self.num_wta_trials, -1)
-        #     .reshape(bs * self.num_wta_trials, -1)
-        # )
         pc_action = expand_pcd(pc_action, self.num_wta_trials).transpose(-1, -2)
         gt_flow = expand_pcd(gt_flow, self.num_wta_trials)
         seg = expand_pcd(seg, self.num_wta_trials)
-
 
         model_kwargs = dict(x0=pc_action)
         # if cross attention, pass in additional data
         if self.model_cfg.type == "flow_cross":
             pc_anchor = batch["pc_anchor"].to(self.device)
-            # pc_anchor = (
-            #     pc_anchor.transpose(-1, -2)
-            #     .unsqueeze(1)
-            #     .expand(-1, self.num_wta_trials, -1, -1)
-            #     .reshape(bs * self.num_wta_trials, -1, self.sample_size_anchor)
-            # )
-
             pc_anchor = expand_pcd(pc_anchor, self.num_wta_trials).transpose(-1, -2)
             model_kwargs["y"] = pc_anchor
 
@@ -198,7 +174,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
         )
         pred_flow = pred_flow.reshape(bs, self.num_wta_trials, -1, 3)
         winner = torch.argmin(rmse, dim=-1)
-        # logging
+        # winner-take-all
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_flows_wta = pred_flow[torch.arange(bs), winner]
@@ -347,7 +323,6 @@ class FlowPredictionTrainingModule(L.LightningModule):
         }
 
 
-# TODO: inference module
 class FlowPredictionInferenceModule(L.LightningModule):
     def __init__(self, network, inference_cfg, model_cfg) -> None:
         super().__init__()
@@ -418,7 +393,6 @@ class FlowPredictionInferenceModule(L.LightningModule):
         }
 
     def predict_wta(self, batch, mode):
-        #pc_action = batch["pc_action"].to(self.device)
         gt_flow = batch["flow"].to(self.device)
         seg = batch["seg"].to(self.device)
         mask = True
@@ -426,10 +400,8 @@ class FlowPredictionInferenceModule(L.LightningModule):
         bs = gt_flow.shape[0]
         gt_flow = expand_pcd(gt_flow, self.num_wta_trials)
         seg = expand_pcd(seg, self.num_wta_trials)
-        # model_kwargs, pred_flow, results = self.predict(batch, self.num_wta_trials, unflatten=False, progress=False)
-        pred_dict = self.predict(batch, self.num_wta_trials, unflatten=False, progress=False)
+        pred_dict = self.predict(batch, self.num_wta_trials, unflatten=False, progress=True)
         pred_flow = pred_dict["pred_flow"]
-
         # computing wta errors
         cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
             bs, self.num_wta_trials
@@ -439,21 +411,27 @@ class FlowPredictionInferenceModule(L.LightningModule):
         )
         pred_flow = pred_flow.reshape(bs, self.num_wta_trials, -1, 3)
         winner = torch.argmin(rmse, dim=-1)
-        # logging
+        # winner-take-all
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
-        pred_flows_wta = pred_flow[torch.arange(bs), winner]
-        # TODO: maybe also return cos_sim and rmse, for general metrics
-        return pred_flows_wta, pred_flow, cos_sim_wta, rmse_wta
+        pred_flow_wta = pred_flow[torch.arange(bs), winner]
+        return {
+            "pred_flow_wta": pred_flow_wta,
+            "pred_flow": pred_flow,
+            "cos_sim_wta": cos_sim_wta,
+            "cos_sim": cos_sim,
+            "rmse_wta": rmse_wta,
+            "rmse": rmse,
+        }
 
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        pred_flows_wtas, cos_sim_wtas, rmse_wtas = self.predict_wta(
-            batch, mode="predict"
-        )
+        predict_wta_dict = self.predict_wta(batch, mode="predict")
         return {
-            "cos_sim": cos_sim_wtas,
-            "rmse": rmse_wtas,
+            "cos_sim_wta": predict_wta_dict["cos_sim_wta"],
+            "cos_sim": predict_wta_dict["cos_sim"],
+            "rmse_wta": predict_wta_dict["rmse_wta"],
+            "rmse": predict_wta_dict["rmse"],
         }
 
 
@@ -497,7 +475,6 @@ class PointPredictionTrainingModule(L.LightningModule):
 
     def forward(self, batch, t, mode="train"):
         # Extract point clouds from batch
-
         pos = batch["pc"].permute(0, 2, 1)  # B, C, N
         pc_action = batch["pc_action"].permute(0, 2, 1)  # B, C, N
         pc_anchor = batch["pc_anchor"].permute(0, 2, 1)  # B, C, N
@@ -559,31 +536,11 @@ class PointPredictionTrainingModule(L.LightningModule):
         pos = batch["pc"].to(self.device)
         pc_action = batch["pc_action"].to(self.device)
         pc_anchor = batch["pc_anchor"].to(self.device)
-
         # reshaping and expanding for winner-take-all
         bs = pc_action.shape[0]
-        # gt_action = (
-        #     pos.unsqueeze(1)
-        #     .expand(-1, self.num_wta_trials, -1, -1)
-        #     .reshape(bs * self.num_wta_trials, self.sample_size, -1)
-        # )
-        # pc_action = (
-        #     pc_action.transpose(-1, -2)
-        #     .unsqueeze(1)
-        #     .expand(-1, self.num_wta_trials, -1, -1)
-        #     .reshape(bs * self.num_wta_trials, -1, self.sample_size)
-        # )
-        # pc_anchor = (
-        #     pc_anchor.transpose(-1, -2)
-        #     .unsqueeze(1)
-        #     .expand(-1, self.num_wta_trials, -1, -1)
-        #     .reshape(bs * self.num_wta_trials, -1, self.sample_size_anchor)
-        # )
-
         gt_action = expand_pcd(pos, self.num_wta_trials)
         pc_action = expand_pcd(pc_action, self.num_wta_trials).transpose(-1, -2)
         pc_anchor = expand_pcd(pc_anchor, self.num_wta_trials).transpose(-1, -2)
-
 
         model_kwargs = dict(
             y=pc_anchor,
@@ -603,7 +560,7 @@ class PointPredictionTrainingModule(L.LightningModule):
         )
         pred_action = pred_action.reshape(bs, self.num_wta_trials, -1, 3)
         winner = torch.argmin(rmse, dim=-1)
-        # logging
+        # winner-take-all
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_actions_wta = pred_action[torch.arange(bs), winner]
@@ -856,10 +813,12 @@ class PointPredictionInferenceModule(L.LightningModule):
         num_samples: int,
         unflatten: bool = False,
         progress: bool = True,
+        return_flow: bool = False,
     ):
         """
         unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return 
         with shape (batch_size * num_samples, ...)
+        return_flow: if True, return predicted flow in world frame as well
         """
         pc_action = batch["pc_action"].to(self.device)
         pc_anchor = batch["pc_anchor"].to(self.device)
@@ -897,26 +856,29 @@ class PointPredictionInferenceModule(L.LightningModule):
                         bs, num_samples, self.sample_size, -1
                     )
 
-        # TODO: this may error out if unflatten is True
-        # TODO: this may error out if num_samples > 1
-        T_action2world = Transform3d(
-            matrix=batch["T_action2world"].to(self.device)
-        )
-        T_goal2world = Transform3d(
-            matrix=batch["T_goal2world"].to(self.device)
-        )
-        # computing pred flow in world frame
-        pc_action = pc_action.transpose(-1, -2)
-        # TODO: consolidate inverse transform code in dataset
-        pred_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
-        return {
+        # TODO: might makes more sense for this to always return predflow, just expand
+        item = {
             "model_kwargs": model_kwargs,
-            "pred_flow": pred_flow, # predicted flow in WORLD frame
             "results": results,
             "pred_action": pred_action, # predicted action in goal frame
         }
 
-
+        if return_flow:
+            # TODO: this may error out if unflatten is True
+            # TODO: this may error out if num_samples > 1
+            T_action2world = Transform3d(
+                matrix=batch["T_action2world"].to(self.device)
+            )
+            T_goal2world = Transform3d(
+                matrix=batch["T_goal2world"].to(self.device)
+            )
+            # computing pred flow in world frame
+            pc_action = pc_action.transpose(-1, -2)
+            # TODO: consolidate inverse transform code in dataset
+            pred_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
+            item["pred_flow"] = pred_flow # predicted flow in WORLD frame
+        return item
+        
     def predict_wta(
             self,
             batch: Dict[str, torch.Tensor],
@@ -937,18 +899,25 @@ class PointPredictionInferenceModule(L.LightningModule):
         )
         pred_action = pred_action.reshape(bs, self.num_wta_trials, -1, 3)
         winner = torch.argmin(rmse, dim=-1)
-        # logging
+        # winner-take-all
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
-        pred_actions_wta = pred_action[torch.arange(bs), winner]
-        return pred_actions_wta, pred_action, cos_sim_wta, rmse_wta
+        pred_action_wta = pred_action[torch.arange(bs), winner]
+        return {
+            "pred_action_wta": pred_action_wta,
+            "pred_action": pred_action,
+            "cos_sim_wta": cos_sim_wta,
+            "cos_sim": cos_sim,
+            "rmse_wta": rmse_wta,
+            "rmse": rmse,
+        }
     
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        pred_actions_wtas, pred_action, cos_sim_wtas, rmse_wtas = self.predict_wta(
-            batch, mode="predict"
-        )
+        predict_wta_dict = self.predict_wta(batch, mode="predict")
         return {
-            "cos_sim": cos_sim_wtas,
-            "rmse": rmse_wtas,
+            "cos_sim_wta": predict_wta_dict["cos_sim_wta"],
+            "cos_sim": predict_wta_dict["cos_sim"],
+            "rmse_wta": predict_wta_dict["rmse_wta"],
+            "rmse": predict_wta_dict["rmse"],
         }

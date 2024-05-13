@@ -196,9 +196,8 @@ def main(cfg):
         model = PointPredictionInferenceModule(
             network, task_type=cfg.task_type, inference_cfg=cfg.inference, model_cfg=cfg.model
         )
-    # for now, this does not support ghost point prediction
     model.eval()
-    model = model.to(f'cuda:{cfg.resources.gpus[0]}')
+    model.to(f'cuda:{cfg.resources.gpus[0]}')
 
     ### RUNNING EVALS ON EACH DATASET ###
     train_dataloader = datamodule.train_dataloader()

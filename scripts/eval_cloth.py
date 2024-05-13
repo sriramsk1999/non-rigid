@@ -11,7 +11,7 @@ import os
 import plotly.express as px
 
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataset, ProcClothFlowDataModule
-from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule
+from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule, PointPredictionInferenceModule
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
@@ -53,29 +53,21 @@ def main(cfg):
     ######################################################################
 
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-    # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
-    # datamodule = MicrowaveFlowDataModule(
-    #     root=data_root,
-    #     batch_size=cfg.training.batch_size,
-    #     val_batch_size=cfg.training.val_batch_size,
-    #     num_workers=cfg.resources.num_workers,
-    # )
-    # if cfg.dataset.type in ["articulated", "articulated_multi"]:
-    #     dm = MicrowaveFlowDataModule
-    if cfg.dataset.type == "cloth":
+    if cfg.dataset.type in ["cloth", "cloth_point"]:
         dm = ProcClothFlowDataModule
+    else:
+        raise NotImplementedError('This script is only for cloth evaluations.')
 
     datamodule = dm(
         root=data_root,
         batch_size=cfg.inference.batch_size,
         val_batch_size=cfg.inference.val_batch_size,
         num_workers=cfg.resources.num_workers,
-        type=cfg.dataset.type,
-        **cfg.dataset.type_args,
+        dataset_cfg=cfg.dataset,
     )
     datamodule.setup(stage="predict")
 
-    # TODO: for now, don't log to wandb
+
     ######################################################################
     # Create the network(s) which will be evaluated (same as training).
     # You might want to put this into a "create_network" function
@@ -90,11 +82,11 @@ def main(cfg):
         in_channels=cfg.model.in_channels,
         learn_sigma=cfg.model.learn_sigma,
         model=cfg.model.dit_arch,
+        model_cfg=cfg.model,
     )
     # get checkpoint file (for now, this does not log a run)
     checkpoint_reference = cfg.checkpoint.reference
-    # if checkpoint_reference.startswith(cfg.wandb.entity):
-    if True:
+    if checkpoint_reference.startswith(cfg.wandb.entity):
         api = wandb.Api()
         artifact_dir = cfg.wandb.artifact_dir
         artifact = api.artifact(checkpoint_reference, type="model")
@@ -109,23 +101,51 @@ def main(cfg):
     # set model to eval mode
     network.eval()
     # move network to gpu for evaluation
-    if torch.cuda.is_available():
-        network.to("cuda:1")
-    cfg.inference.sample_size = cfg.dataset.sample_size
-    model = FlowPredictionInferenceModule(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
-
-    device = "cuda:1"
-    model.to(device)
-    data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-    # sample_size = cfg.dataset.sample_size
-    # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
-    train_dataset = ProcClothFlowDataset(data_root, "train", **cfg.dataset.type_args)
-    val_dataset = ProcClothFlowDataset(data_root, "val", **cfg.dataset.type_args)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=16, shuffle=False)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=4, shuffle=False)
-    # num_wta_trials = 50
-    diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
+    # if torch.cuda.is_available():
+    #     network.to(f"cuda:{cfg.resources.gpus[0]}")
     
+    # setting sample sizes
+    if "scene" in cfg.dataset and cfg.dataset.scene:
+        if cfg.model.type != "flow":
+            raise NotImplementedError("Scene inputs cannot be used with cross-type models.")
+        cfg.inference.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
+    else:
+        cfg.inference.sample_size = cfg.dataset.sample_size_action
+        cfg.inference.sample_size_anchor = cfg.dataset.sample_size_anchor
+
+    # override the task type here based on the dataset
+    if "cloth" in cfg.dataset.type:
+        cfg.task_type = "cloth"
+    elif "rigid" in cfg.dataset.type:
+        cfg.task_type = "rigid"
+    else:
+        raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
+    # create model
+    if cfg.model.type in ["flow", "flow_cross"]:
+        model = FlowPredictionInferenceModule(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
+    elif cfg.model.type in ["point_cross"]:
+        model = PointPredictionInferenceModule(
+            network, task_type=cfg.task_type, inference_cfg=cfg.inference, model_cfg=cfg.model
+        )
+    model.eval()
+    # model.to(f'cuda:{cfg.resources.gpus[0]}')
+
+
+
+
+    # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+    # # sample_size = cfg.dataset.sample_size
+    # # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
+    # train_dataset = ProcClothFlowDataset(data_root, "train", **cfg.dataset.type_args)
+    # val_dataset = ProcClothFlowDataset(data_root, "val", **cfg.dataset.type_args)
+    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=16, shuffle=False)
+    # val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=4, shuffle=False)
+    # # num_wta_trials = 50
+    # diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
+    
+
+
+    device = f"cuda:{cfg.resources.gpus[0]}"
 
     # GET_TRAIN_METRICS = True
     # GET_VAL_METRICS = True
@@ -137,7 +157,7 @@ def main(cfg):
     VISUALIZE_SINGLE = True
     VISUALIZE_SINGLE_IDX = 0
 
-    MMD_METRICS = False
+    MMD_METRICS = True
     PRECISION_METRICS = False
 
 
@@ -177,7 +197,6 @@ def main(cfg):
                 *datamodule.val_dataloader(),
             ]
             )
-
         for outputs_list, name in [
             (train_outputs, "train"),
             (val_outputs, "val"),
@@ -188,12 +207,16 @@ def main(cfg):
             outputs = flatten_outputs(out_cpu)
             # plot histogram
             fig = px.histogram(outputs["rmse"], nbins=100, title=f"{name} MMD RMSE")
-            fig.show()
+            # fig.show()
             # Compute the metrics.
             cos_sim = torch.mean(outputs["cos_sim"])
             rmse = torch.mean(outputs["rmse"])
+            cos_sim_wta = torch.mean(outputs["cos_sim_wta"])
+            rmse_wta = torch.mean(outputs["rmse_wta"])
             print(f"{name} cos sim: {cos_sim}, rmse: {rmse}")
-            # TODO: THIS SHOULD ALSO LOG HISTOGRAMS FROM BEFORE MEANS
+            print(f"{name} cos sim wta: {cos_sim_wta}, rmse wta: {rmse_wta}")
+        quit()
+        # TODO: THIS SHOULD ALSO LOG HISTOGRAMS FROM BEFORE MEANS
 
 
     # TODO: for now, all action inputs are the same, so just grab the first one
