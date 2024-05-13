@@ -123,7 +123,7 @@ def main(cfg):
         cfg.training.sample_size_anchor = cfg.dataset.sample_size_anchor
     
 
-    # override the task_type here based on the datset
+    # override the task type here based on the dataset
     if "cloth" in cfg.dataset.type:
         cfg.task_type = "cloth"
     elif "rigid" in cfg.dataset.type:

@@ -13,6 +13,7 @@ defaults:
   - _self_
 
 seed: 42
+task_type: None # Set during eval loop based on dataset.
 
 
 sim:

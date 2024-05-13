@@ -156,9 +156,15 @@ class ProcClothPointDataset(data.Dataset):
 
         goal_points_action = T1.transform_points(goal_points_action)
         goal_points_anchor = T1.transform_points(goal_points_anchor)
+        T_goal2world = T1.inverse().compose(
+            Translate(center.unsqueeze(0))
+        )
 
-        # Get starting action point cloud (for now, don't rotate)
-        points_action = action_pc - action_pc.mean(dim=0)
+        # Get starting action point cloud (TODO: eventually, include T0)
+        action_center = action_pc.mean(axis=0)
+        points_action = action_pc - action_center
+        T_action2world = Translate(action_center.unsqueeze(0))
+
 
         return {
             "pc": goal_points_action, # Action points in goal position
@@ -170,6 +176,8 @@ class ProcClothPointDataset(data.Dataset):
             "flow": flow,
             "rot": rot,
             "trans": trans,
+            "T_goal2world": T_goal2world.get_matrix().squeeze(0),
+            "T_action2world": T_action2world.get_matrix().squeeze(0),
         }
 
 DATASET_FN = {

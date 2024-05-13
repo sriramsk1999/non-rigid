@@ -8,6 +8,37 @@ from typing import Tuple, List
 from non_rigid.utils.transform_utils import random_se3
 
 
+def expand_pcd(
+        points: torch.Tensor, num_samples: int
+) -> torch.Tensor:
+    """
+    Expands a batch of point clouds by a fixed factor. This is useful when sampling 
+    multiple diffusion predictions for a batch of point clouds.
+
+    Args:
+        points (torch.Tensor): [B, N, C]  or [B, N] Point cloud to expand.
+        num_samples (int): Number of samples to expand to.
+    """
+    assert points.dim() == 3 or points.dim() == 2
+    if points.dim() == 2:
+        B, N = points.shape
+        points = (
+            points.unsqueeze(1)
+            .expand(B, num_samples, N)
+            .reshape(B * num_samples, N)
+        )
+    elif points.dim() == 3:
+        B, N, C = points.shape
+        points = (
+            points.unsqueeze(1)
+            .expand(B, num_samples, N, C)
+            .reshape(B * num_samples, N, C)
+        )
+    else:
+        raise ValueError("Invalid input dimensions")
+    return points
+
+
 def downsample_pcd(
     points: torch.Tensor, num_points: int = 1024, type: str = "fps"
 ) -> Tuple[torch.Tensor, torch.Tensor]:

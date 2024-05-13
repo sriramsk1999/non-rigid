@@ -5,7 +5,7 @@ import torch
 import torch.utils._pytree as pytree
 import wandb
 
-from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionTrainingModule
+from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule, PointPredictionInferenceModule
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
 
 import matplotlib.pyplot as plt
@@ -59,12 +59,20 @@ def get_action(model, obs):
 def play(env, pred_flows, rot, trans):
     num_episodes = pred_flows.shape[0]
     num_successes = 0
-    obs = env.reset(rigid_trans=trans, rigid_rot=rot)
+
+    deform_params = {
+        'num_holes': 1,
+        'node_density': 15,
+        'w': 1.0,
+        'h': 1.0,
+        'holes': [{'x0': 5, 'x1': 8, 'y0': 5, 'y1': 7}]
+    }
+    obs = env.reset(rigid_trans=trans, rigid_rot=rot, deform_params=deform_params)
     # input('Press Enter to start playing...')
     for epsd in tqdm(range(num_episodes)):
         # print('------------ Play episode ', epsd, '------------------')
         if epsd > 0:
-            obs = env.reset(rigid_trans=trans, rigid_rot=rot)
+            obs = env.reset(rigid_trans=trans, rigid_rot=rot, deform_params=deform_params)
         pred_flow = pred_flows[epsd]
         a1_act = pred_flow[14] * 0.2 / 6.36
         a2_act = pred_flow[0] * 0.2 / 6.36
@@ -90,30 +98,8 @@ def play(env, pred_flows, rot, trans):
 
 
 def model_predict(cfg, model, batch):
-    pos = batch["pc"].to(f'cuda:{cfg.resources.gpus[0]}')
-    bs = pos.shape[0]
-    pos = (
-        pos.transpose(-1, -2)
-        .unsqueeze(1)
-        .expand(-1, cfg.inference.num_trials, -1, -1)
-        .reshape(bs * cfg.inference.num_trials, -1, cfg.inference.sample_size)
-    )
-    if cfg.model.type == "flow":
-        model_kwargs = dict(pos=pos)
-    elif cfg.model.type == "flow_cross":
-        pc_anchor = batch["pc_anchor"].to(f'cuda:{cfg.resources.gpus[0]}')
-        pc_anchor = (
-            pc_anchor.transpose(-1, -2)
-            .unsqueeze(1)
-            .expand(-1, cfg.inference.num_trials, -1, -1)
-            .reshape(bs * cfg.inference.num_trials, -1, cfg.inference.sample_size_anchor)
-        )
-        model_kwargs = dict(
-            y=pc_anchor,
-            x0=pos,
-        )
-    model_kwargs, pred_flow, results = model.predict(bs, model_kwargs, cfg.inference.num_trials, unflatten=False, progress=False)
-    
+    pred_dict = model.predict(batch, cfg.inference.num_trials)
+    pred_flow = pred_dict["pred_flow"]
     # computing final predicted goal pose
     if cfg.model.type == "flow":
         seg = batch["seg"].to(f'cuda:{cfg.resources.gpus[0]}')
@@ -148,7 +134,7 @@ def main(cfg):
     # Global seed for reproducibility.
     L.seed_everything(42)
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-    if cfg.dataset.type != "cloth":
+    if cfg.dataset.type not in ["cloth", "cloth_point"]:
         raise NotImplementedError('This script is only for cloth evaluations.')
     datamodule = ProcClothFlowDataModule(
         root=data_root,
@@ -157,7 +143,7 @@ def main(cfg):
         num_workers=cfg.resources.num_workers,
         dataset_cfg=cfg.dataset,
     )
-    # We don't actually the the module, we just need to setup for val + val_ood datasets
+    # We don't actually need the module, we just need to setup for val + val_ood datasets
     datamodule.setup(stage="val")
 
 
@@ -169,8 +155,9 @@ def main(cfg):
         model_cfg=cfg.model,
     )
     # get checkpoint file (for now, this does not log a run)
-    # checkpoint_reference = cfg.checkpoint.reference
-    checkpoint_reference = f"/home/eycai/Documents/non-rigid/scripts/logs/train_{cfg.dataset.name}_{cfg.model.name}/{cfg.date}/{cfg.time}/checkpoints/last.ckpt"
+    checkpoint_reference = cfg.checkpoint.reference
+    # TODO: load a proper check point here
+    # checkpoint_reference = f"/home/eycai/Documents/non-rigid/scripts/logs/train_{cfg.dataset.name}_{cfg.model.name}/{cfg.date}/{cfg.time}/checkpoints/last.ckpt"
     if checkpoint_reference.startswith(cfg.wandb.entity):
     # if True:
         api = wandb.Api()
@@ -184,16 +171,32 @@ def main(cfg):
     network.load_state_dict(
         {k.partition(".")[2]: v for k, v, in ckpt["state_dict"].items()}
     )
-    # training module is for train and eval
-    if cfg.dataset.type_args.scene:
+    
+    # setting sample sizes
+    if "scene" in cfg.dataset and cfg.dataset.scene:
         if cfg.model.type != "flow":
             raise NotImplementedError("Scene inputs cannot be used with cross-type models.")
         cfg.inference.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
     else:
         cfg.inference.sample_size = cfg.dataset.sample_size_action
         cfg.inference.sample_size_anchor = cfg.dataset.sample_size_anchor
+    
+    # override the task type here based on the dataset
+    if "cloth" in cfg.dataset.type:
+        cfg.task_type = "cloth"
+    elif "rigid" in cfg.dataset.type:
+        cfg.task_type = "rigid"
+    else:
+        raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
+
+
+    if cfg.model.type in ["flow", "flow_cross"]:
+        model = FlowPredictionInferenceModule(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
+    elif cfg.model.type in ["point_cross"]:
+        model = PointPredictionInferenceModule(
+            network, task_type=cfg.task_type, inference_cfg=cfg.inference, model_cfg=cfg.model
+        )
     # for now, this does not support ghost point prediction
-    model = FlowPredictionTrainingModule(network, training_cfg=cfg.inference, model_cfg=cfg.model)
     model.eval()
     model = model.to(f'cuda:{cfg.resources.gpus[0]}')
 
@@ -202,19 +205,20 @@ def main(cfg):
     val_dataloader, val_ood_dataloader = datamodule.val_dataloader()
 
 
-    EVAL_TRAIN = True
-    EVAL_VAL = True
+    EVAL_TRAIN = False
+    EVAL_VAL = False
     EVAL_VAL_OOD = True
 
     if EVAL_TRAIN:
         print('Evaluating on training data...')
         total_successes = 0
         for batch in tqdm(train_dataloader):
+            # batch = {k: v.to(f'cuda:{cfg.resources.gpus[0]}') for k, v in batch.items()}
             rot = batch["rot"].squeeze().numpy()
             trans = batch["trans"].squeeze().numpy()
             # breakpoint()
-            pred_flows = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flows, rot, trans)
+            pred_flow = model_predict(cfg, model, batch)
+            total_successes += play(env, pred_flow, rot, trans)
         print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
 
     if EVAL_VAL:
