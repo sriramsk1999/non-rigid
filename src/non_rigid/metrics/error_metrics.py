@@ -204,13 +204,17 @@ def get_rigid_available_pose_errors(
             translate_to_scene_center
         )
 
+        child_pose_to_trans_anchor_frame = child_pose_to_anchor_frame.compose(
+            T1[batch_idx]
+        )
+
         translate_to_goal_action_center = Translate(
             -goal_action_center[batch_idx].unsqueeze(0)
         ).to(device)
 
         # Get the predicted child pose in the trans anchor frame
         child_pred_pose = (
-            child_pose_to_anchor_frame.compose(translate_to_goal_action_center)
+            child_pose_to_trans_anchor_frame.compose(translate_to_goal_action_center)
             .compose(T0[batch_idx])
             .compose(T_pred[batch_idx])
         )
@@ -383,7 +387,7 @@ def get_rigid_available_pose_errors(
         min_trans_dist = float("inf")
         min_rot_dist = float("inf")
         close_trans_list = []
-        for pose in avail_poses_trans_anchor_frame:
+        for i, pose in enumerate(avail_poses_trans_anchor_frame):
             pose_trans = pose[:-1, -1]
             pose_rot = pose[:-1, :-1]
 
