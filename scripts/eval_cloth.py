@@ -9,9 +9,12 @@ from pathlib import Path
 import os
 
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataset, ProcClothFlowDataModule
 from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule, PointPredictionInferenceModule
+from non_rigid.utils.vis_utils import FlowNetAnimation
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
@@ -143,22 +146,12 @@ def main(cfg):
     # # num_wta_trials = 50
     # diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
     
-
-
     device = f"cuda:{cfg.resources.gpus[0]}"
-
-    # GET_TRAIN_METRICS = True
-    # GET_VAL_METRICS = True
-    VISUALIZE_PREDS = False
-    VISUALIZE_PRED_IDS = [0, 1]
-    PREDS_PER_SAMPLE = 10
-
-
-    VISUALIZE_SINGLE = True
-    VISUALIZE_SINGLE_IDX = 0
-
-    MMD_METRICS = True
+    MMD_METRICS = False
     PRECISION_METRICS = False
+
+    VISUALIZE_PREDS = False
+    VISUALIZE_SINGLE = True
 
 
 
@@ -197,6 +190,15 @@ def main(cfg):
                 *datamodule.val_dataloader(),
             ]
             )
+    
+
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True)
+        fig_wta = make_subplots(rows=2, cols=1, shared_xaxes=True)
+        color_dict = {
+            "train": "blue",
+            "val": "red",
+            "val_ood": "green",
+        }
         for outputs_list, name in [
             (train_outputs, "train"),
             (val_outputs, "val"),
@@ -206,8 +208,62 @@ def main(cfg):
             out_cpu = [pytree.tree_map(lambda x: x.cpu(), o) for o in outputs_list]
             outputs = flatten_outputs(out_cpu)
             # plot histogram
-            fig = px.histogram(outputs["rmse"], nbins=100, title=f"{name} MMD RMSE")
-            # fig.show()
+            fig.add_trace(go.Histogram(
+                x=outputs["rmse"].flatten(), 
+                nbinsx=100, 
+                name=f"{name} RMSE",
+                legendgroup=f"{name} RMSE",
+                marker=dict(
+                    color=color_dict[name],
+                ),
+                # color=name,
+                ), row=1, col=1,
+            )
+            fig.add_trace(go.Box(
+                x=outputs["rmse"].flatten(),
+                marker_symbol='line-ns-open',
+                marker=dict(
+                    color=color_dict[name],
+                ),
+                boxpoints='all',
+                #fillcolor='rgba(0,0,0,0)',
+                #line_color='rgba(0,0,0,0)',
+                pointpos=0,
+                hoveron='points',
+                name=f"{name} RMSE",
+                showlegend=False,
+                legendgroup=f"{name} RMSE",           
+                ), row=2, col=1
+            )
+            # plot wta histogram
+            fig_wta.add_trace(go.Histogram(
+                x=outputs["rmse_wta"].flatten(), 
+                nbinsx=100, 
+                name=f"{name} RMSE WTA",
+                legendgroup=f"{name} RMSE WTA",
+                marker=dict(
+                    color=color_dict[name],
+                ),
+                # color=name,
+                ), row=1, col=1,
+            )
+            fig_wta.add_trace(go.Box(
+                x=outputs["rmse_wta"].flatten(),
+                marker_symbol='line-ns-open',
+                marker=dict(
+                    color=color_dict[name],
+                ),
+                boxpoints='all',
+                #fillcolor='rgba(0,0,0,0)',
+                #line_color='rgba(0,0,0,0)',
+                pointpos=0,
+                hoveron='points',
+                name=f"{name} RMSE WTA",
+                showlegend=False,
+                legendgroup=f"{name} RMSE WTA",           
+                ), row=2, col=1
+            )
+
             # Compute the metrics.
             cos_sim = torch.mean(outputs["cos_sim"])
             rmse = torch.mean(outputs["rmse"])
@@ -215,13 +271,10 @@ def main(cfg):
             rmse_wta = torch.mean(outputs["rmse_wta"])
             print(f"{name} cos sim: {cos_sim}, rmse: {rmse}")
             print(f"{name} cos sim wta: {cos_sim_wta}, rmse wta: {rmse_wta}")
-        quit()
-        # TODO: THIS SHOULD ALSO LOG HISTOGRAMS FROM BEFORE MEANS
+        fig.show()
+        fig_wta.show()
 
 
-    # TODO: for now, all action inputs are the same, so just grab the first one
-    # actions inputs no longer the same..grab val, sample a bunch, and eval all of them...
-    
     if PRECISION_METRICS:
         model.to(device)
         # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
@@ -259,107 +312,81 @@ def main(cfg):
 
 
     if VISUALIZE_PREDS:
-        
-        for i in VISUALIZE_PRED_IDS:
-            pred_pcs = []
-            gt_pcs = []
-            # sampling predictions
-            sample = val_dataset[i]
-            pos = sample["pc"].to(device).unsqueeze(0)
-            gt_flow = sample["flow"].to(device).unsqueeze(0)
-            seg = sample["seg"].to(device).bool()
-            
-            # ground truth flow
-            gt_pc = (pos + gt_flow).flatten(end_dim=-2).cpu().numpy()
-            gt_seg = np.zeros(gt_pc.shape[0], dtype=np.int64)
-            # predicted flow
-            pred_pos, pred_flows = model.predict(pos, PREDS_PER_SAMPLE, False)
-            pred_pcs = (pred_pos[..., seg, :] + pred_flows[..., seg, :]).flatten(end_dim=-2).cpu().numpy()
-            # plot
-            # color_seg = np.array([np.arange(PREDS_PER_SAMPLE + 1)] * cfg.dataset.sample_size).T.flatten()
-            color_seg = np.array([np.arange(PREDS_PER_SAMPLE)] * seg.cpu().sum()).T.flatten()
+        model.to(device)
+        dataloader = torch.utils.data.DataLoader(
+            datamodule.val_ood_dataset, batch_size=1, shuffle=False
+        )
+        batch = next(iter(dataloader))
+        pred_dict = model.predict(batch, 10)
+        # extracting anchor point cloud depending on model type
+        if cfg.model.type == "flow":
+            scene_pc = batch["pc"].flatten(0, 1).cpu().numpy()
+            seg = batch["seg"].flatten(0, 1).cpu().numpy()
+            anchor_pc = scene_pc[~seg.astype(bool)]
+        else:
+            anchor_pc = batch["pc_anchor"].flatten(0, 1).cpu().numpy()
 
-            fig = vpl.segmentation_fig(
-                np.concatenate((pos.cpu().squeeze(), gt_pc, pred_pcs)), 
-                np.concatenate((np.zeros(pos.shape[-2], dtype=np.int64), 
-                                gt_seg, color_seg)),
-            )
-            fig.show()
-        # pred_pcs = []
-        # gt_pcs = []
-        # # visualizing predictions
-        # for batch in tqdm(val_loader):
-        #     pos = batch["pc"].to(device)
-        #     gt_flow = batch["flow"].to(device)
-        #     gt_pc = (pos + gt_flow).flatten(end_dim=-2).cpu().numpy()
-        #     pos, pred_flows = model.predict(pos, 10, False)
-        #     pred_pc = (pos + pred_flows).flatten(end_dim=-2).cpu().numpy()
-
-        #     gt_pcs.append(gt_pc)
-        #     pred_pcs.append(pred_pc)
-        #     # TODO: clean this up; better variable names, remove predict function
-        #     # remove all unnecssary variables
-        
-        # pred_pcs = np.concatenate(pred_pcs)
-        # gt_pcs = np.concatenate(gt_pcs)
-        # # pred_seg = np.ones(pred_pcs_t.shape[0], dtype=np.int64)
-        # pred_seg = np.array([np.arange(2, 322)] * 213).T.flatten()
-
-        # gt_seg = np.zeros(gt_pcs.shape[0], dtype=np.int64)
-        # # anchor_seg = np.ones(anchor_pc.shape[0], dtype=np.int64)*1
-
-        # action_pc = train_dataset[0]["pc"]
-        # action_seg = np.ones(action_pc.shape[0], dtype=np.int64)*1
-
-        # fig = vpl.segmentation_fig(
-        #     # np.concatenate((pred_pcs, gt_pcs, anchor_pc, action_pc)), 
-        #     # np.concatenate((pred_seg, gt_seg, anchor_seg, action_seg)),
-        #     np.concatenate((pred_pcs, gt_pcs, action_pc)), 
-        #     np.concatenate((pred_seg, gt_seg, action_seg)),
-        # )
-        # fig.show()
-
-
-    # plot single diffusion chain
-    # TODO: have model.predict return results so this can just call that instead
-    # of having to create separate diffusion object
-    
-    if VISUALIZE_SINGLE:
-        from non_rigid.utils.vis_utils import FlowNetAnimation
-        animation = FlowNetAnimation()
-        pos = val_dataset[VISUALIZE_SINGLE_IDX]["pc"].to(device).unsqueeze(0)
-        seg = val_dataset[VISUALIZE_SINGLE_IDX]["seg"].to(device).bool()
-
-        pos[:, ~seg, :] += torch.tensor([[[0.0, 0, 5.0]]]).to(device)
-
-        pred_pos, pred_flow, results = model.predict(pos, 1, False, True)
-        print(pred_pos.shape, pred_flow.shape, len(results), results[0].shape)
-
-        # pos = pos.unsqueeze(0).cuda().transpose(-1, -2)
-        # z = torch.randn(1, 213, 3).cuda().transpose(-1, -2)
-        # model_kwargs = dict(pos=pos)
-        # # denoise
-        # pred_flow, results = diffusion.p_sample_loop(
-        #     network, z.shape, z, clip_denoised=False,
-        #     model_kwargs=model_kwargs, progress=True, device=device
-        # )
-        pred_flow = pred_flow.squeeze(0)
-        pcd = pred_pos.squeeze().cpu()
-
-        # combined_pcd = torch.cat([pcd, torch.as_tensor(anchor_pc)], dim=0)
-
-        for noise_step in tqdm(results[0:]):
-            pred_flow_step = noise_step.squeeze(0).cpu()
-            animation.add_trace(
-                pcd,
-                [pcd],
-                [pred_flow_step],
-                "red",
-            )
-
-        fig = animation.animate()
+        pred_action = pred_dict["pred_action"].flatten(0, 1).cpu().numpy()
+        # color-coded segmentations
+        anchor_seg = np.zeros(anchor_pc.shape[0], dtype=np.int64)
+        if cfg.model.type == "flow":
+            pred_action_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
+        else:
+            pred_action_size = cfg.dataset.sample_size_action
+        pred_action_seg = np.array([np.arange(1, 11)] * pred_action_size).T.flatten()
+        # visualize
+        fig = vpl.segmentation_fig(
+            np.concatenate((anchor_pc, pred_action)),
+            np.concatenate((anchor_seg, pred_action_seg)),
+        )
         fig.show()
 
+
+    if VISUALIZE_SINGLE:
+        model.to(device)
+        dataloader = torch.utils.data.DataLoader(
+            datamodule.val_dataset, batch_size=1, shuffle=False
+        )
+        batch = next(iter(dataloader))
+        pred_dict = model.predict(batch, 1)
+
+        results = pred_dict["results"]
+        action_pc = batch["pc_action"].flatten(0, 1).cpu()
+        # pred_action = .cpu()
+        if cfg.model.type == "flow":
+            pcd = batch["pc_action"].flatten(0, 1).cpu()
+        elif cfg.model.type == "flow_cross":
+            pcd = torch.cat([
+                batch["pc_anchor"].flatten(0, 1),
+                batch["pc_action"].flatten(0, 1)
+            ], dim=0).cpu()
+        elif cfg.model.type == "point_cross":
+            pcd = torch.cat([
+                batch["pc_anchor"].flatten(0, 1),
+                pred_dict["pred_action"].flatten(0, 1).cpu()
+            ], dim=0).cpu()    
+        
+        # visualize
+        animation = FlowNetAnimation()
+        for noise_step in tqdm(results):
+            pred_step = noise_step[0].permute(1, 0).cpu()
+            if cfg.model.type == "point_cross":
+                flows = torch.zeros_like(pred_step)
+                animation.add_trace(
+                    pcd,
+                    [flows],
+                    [pred_step],
+                    "red",
+                )
+            else:
+                animation.add_trace(
+                    pcd,
+                    [action_pc if cfg.model.type == "flow_cross" else pcd],
+                    [pred_step],
+                    "red",
+                )
+        fig = animation.animate()
+        fig.show()
 
 if __name__ == "__main__":
     main()

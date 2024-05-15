@@ -386,9 +386,12 @@ class FlowPredictionInferenceModule(L.LightningModule):
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
                     model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
+        
+        pred_action = pc_action.transpose(-1, -2) + pred_flow
         return {
             "model_kwargs": model_kwargs,
             "pred_flow": pred_flow,
+            "pred_action": pred_action,
             "results": results,
         }
 
@@ -813,7 +816,7 @@ class PointPredictionInferenceModule(L.LightningModule):
         num_samples: int,
         unflatten: bool = False,
         progress: bool = True,
-        return_flow: bool = False,
+        return_flow: bool = True,
     ):
         """
         unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return 
@@ -867,14 +870,13 @@ class PointPredictionInferenceModule(L.LightningModule):
             # TODO: this may error out if unflatten is True
             # TODO: this may error out if num_samples > 1
             T_action2world = Transform3d(
-                matrix=batch["T_action2world"].to(self.device)
+                matrix=expand_pcd(batch["T_action2world"].to(self.device), num_samples)
             )
             T_goal2world = Transform3d(
-                matrix=batch["T_goal2world"].to(self.device)
+                matrix=expand_pcd(batch["T_goal2world"].to(self.device), num_samples)
             )
             # computing pred flow in world frame
             pc_action = pc_action.transpose(-1, -2)
-            # TODO: consolidate inverse transform code in dataset
             pred_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
             item["pred_flow"] = pred_flow # predicted flow in WORLD frame
         return item
