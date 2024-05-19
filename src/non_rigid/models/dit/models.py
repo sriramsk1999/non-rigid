@@ -20,6 +20,8 @@ from typing import Optional
 from non_rigid.nets.dgcnn import DGCNN
 from non_rigid.models.dit.relative_encoding import RotaryPositionEncoding3D, MultiheadRelativeAttentionWrapper
 
+torch.set_printoptions(precision=8, sci_mode=True)
+
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
@@ -683,6 +685,11 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
             y (torch.Tensor): (B, D, N) tensor of un-noised scene (e.g. anchor) features
             x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
         """
+        if self.model_cfg.x_relative:
+            relative_center = torch.mean(x, dim=2, keepdim=True)
+            x = x - relative_center
+            y = y - relative_center
+        
         x_emb = self.x_embedder(x)
 
         if self.model_cfg.x0_encoder is not None:
@@ -847,6 +854,11 @@ class Rel3D_DiT_PointCloud_Unc_Cross(nn.Module):
             x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
         """
 
+        if self.model_cfg.x_relative:
+            relative_center = torch.mean(x, dim=2, keepdim=True)
+            x = x - relative_center
+            y = y - relative_center
+
         # Get x and y relative 3D positional encoding
         x_pos = self.relative_3d_encoding(x.permute(0, 2, 1))
         y_pos = self.relative_3d_encoding(y.permute(0, 2, 1))
@@ -873,7 +885,7 @@ class Rel3D_DiT_PointCloud_Unc_Cross(nn.Module):
         x = self.final_layer(x, c)
 
         x = x.permute(0, 2, 1)
-
+            
         return x
 
 
