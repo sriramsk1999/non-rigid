@@ -34,6 +34,18 @@ class ProcClothFlowDataset(data.Dataset):
         self.scene = self.dataset_cfg.scene
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
+        self.world_frame = self.dataset_cfg.world_frame
+        if self.scene and not self.world_frame:
+            raise ValueError("Scene inputs require a world frame.")
+        # if world frame, manually override data pre-processing
+        if self.world_frame:
+            print("-------Overriding data pre-processing for world frame.-------")
+            self.dataset_cfg.center_type = "none"
+            self.dataset_cfg.action_context_center_type = "none"
+            self.dataset_cfg.action_transform_type = "identity"
+            self.dataset_cfg.anchor_transform_type = "identity"
+            self.dataset_cfg.rotation_variance = 0.0
+            self.dataset_cfg.translation_variance = 0.0
         
     
     def __len__(self):
@@ -50,6 +62,18 @@ class ProcClothFlowDataset(data.Dataset):
         flow = torch.as_tensor(demo["flow"]).float()
         rot = demo["rot"]
         trans = demo["trans"]
+
+
+        # downsampling action point cloud
+        # action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
+        # action_pc = action_pc.squeeze(0)
+        # action_seg = action_seg[action_pc_indices.squeeze(0)]
+        # flow = flow[action_pc_indices.squeeze(0)]
+        if action_pc.shape[0] > self.sample_size_action:
+            action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
+            action_pc = action_pc.squeeze(0)
+            action_seg = action_seg[action_pc_indices.squeeze(0)]
+            flow = flow[action_pc_indices.squeeze(0)]
 
         # downsampling anchor point cloud
         anchor_pc, anchor_pc_indices = downsample_pcd(anchor_pc.unsqueeze(0), self.sample_size_anchor, type=self.dataset_cfg.downsample_type)
@@ -72,16 +96,84 @@ class ProcClothFlowDataset(data.Dataset):
                 "trans": trans,
             }
         else:
+            points_action = action_pc + flow
+            points_anchor = anchor_pc
+
+            # Center the point clouds
+            if self.dataset_cfg.center_type == "action_center":
+                center = points_action.mean(axis=0)
+            elif self.dataset_cfg.center_type == "anchor_center":
+                center = points_anchor.mean(axis=0)
+            elif self.dataset_cfg.center_type == "anchor_random":
+                center = points_anchor[np.random.choice(len(points_anchor))]
+            elif self.dataset_cfg.center_type == "none":
+                center = torch.zeros(3, dtype=torch.float32)
+            else:
+                raise ValueError(f"Unknown center type: {self.dataset_cfg.center_type}")
+            goal_points_action = points_action - center
+            goal_points_anchor = points_anchor - center
+
+            # Transform the point clouds
+            T0 = random_se3(
+                N=1,
+                rot_var=self.dataset_cfg.rotation_variance,
+                trans_var=self.dataset_cfg.translation_variance,
+                rot_sample_method=self.dataset_cfg.action_transform_type,
+            )
+            T1 = random_se3(
+                N=1,
+                rot_var=self.dataset_cfg.rotation_variance,
+                trans_var=self.dataset_cfg.translation_variance,
+                rot_sample_method=self.dataset_cfg.anchor_transform_type,
+            )
+
+            goal_points_action = T1.transform_points(goal_points_action)
+            goal_points_anchor = T1.transform_points(goal_points_anchor)
+            T_goal2world = T1.inverse().compose(
+                Translate(center.unsqueeze(0))
+            )
+
+            # Get starting action point cloud (TODO: eventually, include T0)
+
+            if self.dataset_cfg.action_context_center_type == "center":
+                action_center = action_pc.mean(axis=0)
+            elif self.dataset_cfg.action_context_center_type == "random":
+                action_center = action_pc[np.random.choice(len(action_pc))]
+            elif self.dataset_cfg.action_context_center_type == "none":
+                action_center = torch.zeros(3, dtype=torch.float32)
+            else:
+                raise ValueError(f"Unknown action context center type: {self.dataset_cfg.action_context_center_type}")
+
+            # action_center = action_pc.mean(axis=0)
+            # action_center = torch.zeros(3, dtype=torch.float32)
+            points_action = action_pc - action_center
+            T_action2world = Translate(action_center.unsqueeze(0))
+
+            # Get the flow
+            gt_flow = goal_points_action - points_action
+            # item = {
+            #     "pc": action_pc + flow, # Action points in goal position
+            #     "pc_action": action_pc, # Action points in starting position
+            #     "pc_anchor": anchor_pc, # Anchor points in goal position
+            #     "seg": action_seg,
+            #     "seg_anchor": anchor_seg,
+            #     "speed_factor": speed_factor,
+            #     "flow": flow,
+            #     "rot": rot,
+            #     "trans": trans,
+            # }
             item = {
-                "pc": action_pc + flow, # Action points in goal position
-                "pc_action": action_pc, # Action points in starting position
-                "pc_anchor": anchor_pc, # Anchor points in goal position
+                "pc": goal_points_action, # Action points in goal position
+                "pc_action": points_action, # Action points for context
+                "pc_anchor": goal_points_anchor, # Anchor points in goal position
                 "seg": action_seg,
                 "seg_anchor": anchor_seg,
                 "speed_factor": speed_factor,
-                "flow": flow,
+                "flow": gt_flow, # flow in goal position
                 "rot": rot,
                 "trans": trans,
+                "T_goal2world": T_goal2world.get_matrix().squeeze(0),
+                "T_action2world": T_action2world.get_matrix().squeeze(0),
             }
         return item
 
@@ -114,6 +206,16 @@ class ProcClothPointDataset(data.Dataset):
         rot = demo["rot"]
         trans=demo["trans"]
 
+        # downsample action
+        if action_pc.shape[0] > self.sample_size_action:
+            action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
+            action_pc = action_pc.squeeze(0)
+            action_seg = action_seg[action_pc_indices.squeeze(0)]
+            flow = flow[action_pc_indices.squeeze(0)]
+        # downsample anchor
+        anchor_pc, _ = downsample_pcd(anchor_pc.unsqueeze(0), self.sample_size_anchor, type=self.dataset_cfg.downsample_type)
+        anchor_pc = anchor_pc.squeeze(0)
+
         # kinda confusing variables names for now, just for consistency
         points_action = action_pc + flow
         points_anchor = anchor_pc
@@ -133,12 +235,12 @@ class ProcClothPointDataset(data.Dataset):
         goal_points_anchor = points_anchor - center
 
         # Downsample the point clouds (for now, this is only for anchor)
-        goal_points_anchor, _ = downsample_pcd(
-            goal_points_anchor.unsqueeze(0),
-            num_points=self.dataset_cfg.sample_size_anchor,
-            type=self.dataset_cfg.downsample_type,
-        )
-        goal_points_anchor = goal_points_anchor.squeeze(0)
+        # goal_points_anchor, _ = downsample_pcd(
+        #     goal_points_anchor.unsqueeze(0),
+        #     num_points=self.dataset_cfg.sample_size_anchor,
+        #     type=self.dataset_cfg.downsample_type,
+        # )
+        # goal_points_anchor = goal_points_anchor.squeeze(0)
 
         # Transform the point clouds
         T0 = random_se3(
@@ -186,8 +288,6 @@ DATASET_FN = {
 }
 
 
-
-
 class ProcClothFlowDataModule(L.LightningDataModule):
     def __init__(self, root, batch_size, val_batch_size, num_workers, dataset_cfg):# type, scene):
         super().__init__()
@@ -197,6 +297,11 @@ class ProcClothFlowDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.stage = None
         self.dataset_cfg = dataset_cfg
+
+        # TODO: fill the rest of this out
+        # pre-processing if dataset is multi cloth
+        # if "multi_cloth" in self.dataset_cfg:
+
 
     def prepare_data(self) -> None:
         pass
@@ -243,3 +348,34 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
         )
         return val_dataloader, val_ood_dataloader
+
+if __name__ == "__main__":
+    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_2/val")
+    import rpad.visualize_3d.plots as vpl
+    for i in range(40):
+        demo = np.load(dir / f"demo_{i}.npz")
+        action = demo["action_pc"]
+        anchor = demo["anchor_pc"]
+        action_seg = demo["action_seg"]
+        anchor_seg = demo["anchor_seg"]
+        flow = demo["flow"]
+        goal = action + flow
+        
+
+        # action = torch.tensor(action).float()
+        # action, indices = downsample_pcd(action.unsqueeze(0), 512, type="fps")
+        # action_seg = action_seg[indices.squeeze(0)]
+        # vpl.segmentation_fig(action.squeeze(0), action_seg.astype(int)).show()
+
+
+
+        action_seg = np.ones_like(action_seg).astype(np.int32)
+        anchor_seg = np.zeros_like(anchor_seg).astype(np.int32)
+        goal_seg = np.ones_like(action_seg).astype(np.int32) * 5
+
+        fig = vpl.segmentation_fig(
+            np.concatenate([action, anchor, goal], axis=0),
+            np.concatenate([action_seg, anchor_seg, goal_seg], axis=0),
+        )
+        fig.show()
+    print('done')

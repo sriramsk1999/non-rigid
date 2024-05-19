@@ -147,10 +147,10 @@ def main(cfg):
     # diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
     
     device = f"cuda:{cfg.resources.gpus[0]}"
-    MMD_METRICS = False
+    MMD_METRICS = True
     PRECISION_METRICS = False
 
-    VISUALIZE_PREDS = False
+    VISUALIZE_PREDS = True
     VISUALIZE_SINGLE = True
 
 
@@ -354,11 +354,16 @@ def main(cfg):
         action_pc = batch["pc_action"].flatten(0, 1).cpu()
         # pred_action = .cpu()
         if cfg.model.type == "flow":
-            pcd = batch["pc_action"].flatten(0, 1).cpu()
+            # pcd = batch["pc_action"].flatten(0, 1).cpu()
+            pcd = torch.cat([
+                batch["pc_action"].flatten(0, 1),
+                pred_dict["pred_action"].flatten(0, 1).cpu(),
+            ]).cpu()
         elif cfg.model.type == "flow_cross":
             pcd = torch.cat([
                 batch["pc_anchor"].flatten(0, 1),
-                batch["pc_action"].flatten(0, 1)
+                batch["pc_action"].flatten(0, 1),
+                pred_dict['pred_action'].flatten(0, 1).cpu(),
             ], dim=0).cpu()
         elif cfg.model.type == "point_cross":
             pcd = torch.cat([

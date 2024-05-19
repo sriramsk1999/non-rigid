@@ -1,13 +1,17 @@
-name: pc_single_cloth_multi_anchor
-data_dir: "~/datasets/nrp/ProcCloth/single_cloth_multi_anchor/demos"
+name: pc_multi_cloth
+data_dir: "~/datasets/nrp/ProcCloth/multi_cloth_1/"
 type: cloth
-sample_size_action: 213
+sample_size_action: 512
 sample_size_anchor: 512
 downsample_type: fps
 scene: True
 
+multi_cloth:
+  hole: single
+  size: 100
+
 world_frame: True
-# Dataset pre-processing options - these are only used when 'scene' is set to False
+# Dataset pre-processing options
 center_type: anchor_center # [action_center, anchor_center, anchor_random, none], centers the point clouds w.r.t. the action, anchor, or no centering
 action_context_center_type: center # [center, random, none], centers the action context point clouds
 # pcd_scale_factor: 15.0 # Scale factor for the point clouds

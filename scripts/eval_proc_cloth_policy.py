@@ -83,14 +83,21 @@ def play(env, pred_flows, rot, trans):
             assert (not isinstance(env.action_space, gym.spaces.Discrete))
             next_obs, rwd, done, info = env.step(act)
             if done:
-                success = env.check_success(debug=False)
+                centroid_check = env.check_centroid()
+                # success = env.check_success(debug=False)
                 info = env.end_episode(rwd)
+                polygon_check = env.check_polygon()
+                success = np.any(centroid_check * polygon_check)
+                #success = env.check_success2(debug=False)
                 if success:
                     num_successes += 1
+                # input('Episode ended; press Enter to continue...')
                 # print('step: ', step, 'Task Successful: ', success)
                 break
             obs = next_obs
             step += 1
+        
+        
 
         # input('Episode ended; press Enter to continue...')
         # env.close()
@@ -99,7 +106,7 @@ def play(env, pred_flows, rot, trans):
 
 def model_predict(cfg, model, batch):
     pred_dict = model.predict(batch, cfg.inference.num_trials)
-    pred_flow = pred_dict["pred_flow"]
+    pred_flow = pred_dict["pred_world_flow"]
     # computing final predicted goal pose
     if cfg.model.type == "flow":
         seg = batch["seg"].to(f'cuda:{cfg.resources.gpus[0]}')
@@ -203,9 +210,8 @@ def main(cfg):
     train_dataloader = datamodule.train_dataloader()
     val_dataloader, val_ood_dataloader = datamodule.val_dataloader()
 
-
-    EVAL_TRAIN = False
-    EVAL_VAL = False
+    EVAL_TRAIN = True
+    EVAL_VAL = True
     EVAL_VAL_OOD = True
 
     if EVAL_TRAIN:

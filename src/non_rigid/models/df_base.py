@@ -388,9 +388,26 @@ class FlowPredictionInferenceModule(L.LightningModule):
                     model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
         
         pred_action = pc_action.transpose(-1, -2) + pred_flow
+
+
+        if self.model_cfg.type == "flow_cross":
+            # inverting transforms to get world frame flow
+            T_action2world = Transform3d(
+                matrix=expand_pcd(batch["T_action2world"].to(self.device), num_samples)
+            )
+            T_goal2world = Transform3d(
+                matrix=expand_pcd(batch["T_goal2world"].to(self.device), num_samples)
+            )
+            # computing pred flow in world frame
+            pc_action = pc_action.transpose(-1, -2)
+            pred_world_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
+        else:
+            pred_world_flow = pred_flow
+
         return {
             "model_kwargs": model_kwargs,
             "pred_flow": pred_flow,
+            "pred_world_flow": pred_world_flow,
             "pred_action": pred_action,
             "results": results,
         }
@@ -878,7 +895,7 @@ class PointPredictionInferenceModule(L.LightningModule):
             # computing pred flow in world frame
             pc_action = pc_action.transpose(-1, -2)
             pred_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
-            item["pred_flow"] = pred_flow # predicted flow in WORLD frame
+            item["pred_world_flow"] = pred_flow # predicted flow in WORLD frame
         return item
         
     def predict_wta(
@@ -889,7 +906,7 @@ class PointPredictionInferenceModule(L.LightningModule):
         pos = batch["pc"].to(self.device)
         bs = pos.shape[0]
         gt_action = expand_pcd(pos, self.num_wta_trials)
-        pred_dict = self.predict(batch, self.num_wta_trials, unflatten=False, progress=False)
+        pred_dict = self.predict(batch, self.num_wta_trials, unflatten=False, progress=True)
         pred_action = pred_dict["pred_action"]
 
         # computing wta errors
