@@ -56,17 +56,18 @@ def get_action(model, obs):
     return
 
 # def play(env, model, num_episodes, args):
-def play(env, pred_flows, rot, trans):
+def play(env, pred_flows, rot, trans, deform_params=None):
     num_episodes = pred_flows.shape[0]
     num_successes = 0
 
-    deform_params = {
-        'num_holes': 1,
-        'node_density': 15,
-        'w': 1.0,
-        'h': 1.0,
-        'holes': [{'x0': 5, 'x1': 8, 'y0': 5, 'y1': 7}]
-    }
+    if deform_params is None:
+        deform_params = {
+            'num_holes': 1,
+            'node_density': 15,
+            'w': 1.0,
+            'h': 1.0,
+            'holes': [{'x0': 5, 'x1': 8, 'y0': 5, 'y1': 7}]
+        }
     obs = env.reset(rigid_trans=trans, rigid_rot=rot, deform_params=deform_params)
     # input('Press Enter to start playing...')
     for epsd in tqdm(range(num_episodes)):
@@ -74,7 +75,7 @@ def play(env, pred_flows, rot, trans):
         if epsd > 0:
             obs = env.reset(rigid_trans=trans, rigid_rot=rot, deform_params=deform_params)
         pred_flow = pred_flows[epsd]
-        a1_act = pred_flow[14] * 0.2 / 6.36
+        a1_act = pred_flow[deform_params['node_density'] - 1] * 0.2 / 6.36
         a2_act = pred_flow[0] * 0.2 / 6.36
         act = torch.cat([a1_act, a2_act], dim=0).cpu().numpy()
 
@@ -107,12 +108,12 @@ def play(env, pred_flows, rot, trans):
 def model_predict(cfg, model, batch):
     pred_dict = model.predict(batch, cfg.inference.num_trials)
     pred_flow = pred_dict["pred_world_flow"]
+
     # computing final predicted goal pose
     if cfg.model.type == "flow":
         seg = batch["seg"].to(f'cuda:{cfg.resources.gpus[0]}')
         pred_flow = pred_flow[:, seg.squeeze(0) == 1, :]
     return pred_flow
-
 
 
 @torch.no_grad()
@@ -143,6 +144,13 @@ def main(cfg):
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
     if cfg.dataset.type not in ["cloth", "cloth_point"]:
         raise NotImplementedError('This script is only for cloth evaluations.')
+    
+    # TODO: if inference is full action, set sample size to -1
+    if cfg.inference.action_full:
+        cfg.dataset.sample_size_action = -1
+    else:
+        raise NotImplementedError('This script is only for full action inference.')
+
     datamodule = ProcClothFlowDataModule(
         root=data_root,
         batch_size=1, # cfg.inference.batch_size,
@@ -221,9 +229,13 @@ def main(cfg):
             # batch = {k: v.to(f'cuda:{cfg.resources.gpus[0]}') for k, v in batch.items()}
             rot = batch["rot"].squeeze().numpy()
             trans = batch["trans"].squeeze().numpy()
-            # breakpoint()
+            if "deform_params" in batch:
+                deform_params = batch["deform_params"][0]
+            else:
+                deform_params = None
+
             pred_flow = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flow, rot, trans)
+            total_successes += play(env, pred_flow, rot, trans, deform_params)
         print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
 
     if EVAL_VAL:
@@ -232,6 +244,11 @@ def main(cfg):
         for batch in tqdm(val_dataloader):
             rot = batch["rot"].squeeze().numpy()
             trans = batch["trans"].squeeze().numpy()
+            if "deform_params" in batch:
+                deform_params = batch["deform_params"][0]
+            else:
+                deform_params = None
+
             pred_flows = model_predict(cfg, model, batch)
             total_successes += play(env, pred_flows, rot, trans)
         print('Total successes on validation data: ', total_successes, '/', len(val_dataloader))
@@ -242,6 +259,11 @@ def main(cfg):
         for batch in tqdm(val_ood_dataloader):
             rot = batch["rot"].squeeze().numpy()
             trans = batch["trans"].squeeze().numpy()
+            if "deform_params" in batch:
+                deform_params = batch["deform_params"][0]
+            else:
+                deform_params = None
+
             pred_flows = model_predict(cfg, model, batch)
             total_successes += play(env, pred_flows, rot, trans)
         print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))

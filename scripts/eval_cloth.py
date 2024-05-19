@@ -386,7 +386,7 @@ def main(cfg):
             else:
                 animation.add_trace(
                     pcd,
-                    [action_pc if cfg.model.type == "flow_cross" else pcd],
+                    [action_pc],# if cfg.model.type == "flow_cross" else pcd],
                     [pred_step],
                     "red",
                 )

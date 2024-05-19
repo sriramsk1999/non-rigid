@@ -53,23 +53,28 @@ class ProcClothFlowDataset(data.Dataset):
     
     def __getitem__(self, index):
         # load data
-        demo = np.load(self.dataset_dir / f"demo_{index}.npz")
+        demo = np.load(self.dataset_dir / f"demo_{index}.npz", allow_pickle=True)
         action_pc = torch.as_tensor(demo["action_pc"]).float()
         action_seg = torch.as_tensor(demo["action_seg"]).int()
         anchor_pc = torch.as_tensor(demo["anchor_pc"]).float()
         anchor_seg = torch.as_tensor(demo["anchor_seg"]).int()
         speed_factor = torch.as_tensor(demo["speed_factor"]).float()
         flow = torch.as_tensor(demo["flow"]).float()
-        rot = demo["rot"]
-        trans = demo["trans"]
+        rot = torch.as_tensor(demo["rot"]).float()
+        trans = torch.as_tensor(demo["trans"]).float()
 
+        # initializing item
+        item = {
+            "speed_factor": speed_factor,
+            "rot": rot,
+            "trans": trans,
+        }
+        # legacy, because some old demos don't have this field
+        if "deform_params" in demo:
+            item["deform_params"] = demo["deform_params"].item()
 
         # downsampling action point cloud
-        # action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
-        # action_pc = action_pc.squeeze(0)
-        # action_seg = action_seg[action_pc_indices.squeeze(0)]
-        # flow = flow[action_pc_indices.squeeze(0)]
-        if action_pc.shape[0] > self.sample_size_action:
+        if self.sample_size_action > 0 and action_pc.shape[0] > self.sample_size_action:
             action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
             action_pc = action_pc.squeeze(0)
             action_seg = action_seg[action_pc_indices.squeeze(0)]
@@ -86,15 +91,19 @@ class ProcClothFlowDataset(data.Dataset):
             scene_seg = torch.cat([action_seg, anchor_seg], dim=0)
             anchor_flow = torch.zeros_like(anchor_pc)
             scene_flow = torch.cat([flow, anchor_flow], dim=0)
-            item = {
-                "pc": scene_pc + scene_flow, # Scene points in goal position
-                "pc_action": scene_pc, # Scene points in starting position
-                "seg": scene_seg, 
-                "flow": scene_flow,
-                "speed_factor": speed_factor,
-                "rot": rot,
-                "trans": trans,
-            }
+            # item = {
+            #     "pc": scene_pc + scene_flow, # Scene points in goal position
+            #     "pc_action": scene_pc, # Scene points in starting position
+            #     "seg": scene_seg, 
+            #     "flow": scene_flow,
+            #     "speed_factor": speed_factor,
+            #     "rot": rot,
+            #     "trans": trans,
+            # }
+            item["pc"] = scene_pc + scene_flow # Scene points in goal position
+            item["pc_action"] = scene_pc # Scene points in starting position
+            item["seg"] = scene_seg
+            item["flow"] = scene_flow
         else:
             points_action = action_pc + flow
             points_anchor = anchor_pc
@@ -144,37 +153,32 @@ class ProcClothFlowDataset(data.Dataset):
             else:
                 raise ValueError(f"Unknown action context center type: {self.dataset_cfg.action_context_center_type}")
 
-            # action_center = action_pc.mean(axis=0)
-            # action_center = torch.zeros(3, dtype=torch.float32)
             points_action = action_pc - action_center
             T_action2world = Translate(action_center.unsqueeze(0))
 
             # Get the flow
             gt_flow = goal_points_action - points_action
             # item = {
-            #     "pc": action_pc + flow, # Action points in goal position
-            #     "pc_action": action_pc, # Action points in starting position
-            #     "pc_anchor": anchor_pc, # Anchor points in goal position
+            #     "pc": goal_points_action, # Action points in goal position
+            #     "pc_action": points_action, # Action points for context
+            #     "pc_anchor": goal_points_anchor, # Anchor points in goal position
             #     "seg": action_seg,
             #     "seg_anchor": anchor_seg,
             #     "speed_factor": speed_factor,
-            #     "flow": flow,
+            #     "flow": gt_flow, # flow in goal position
             #     "rot": rot,
             #     "trans": trans,
+            #     "T_goal2world": T_goal2world.get_matrix().squeeze(0),
+            #     "T_action2world": T_action2world.get_matrix().squeeze(0),
             # }
-            item = {
-                "pc": goal_points_action, # Action points in goal position
-                "pc_action": points_action, # Action points for context
-                "pc_anchor": goal_points_anchor, # Anchor points in goal position
-                "seg": action_seg,
-                "seg_anchor": anchor_seg,
-                "speed_factor": speed_factor,
-                "flow": gt_flow, # flow in goal position
-                "rot": rot,
-                "trans": trans,
-                "T_goal2world": T_goal2world.get_matrix().squeeze(0),
-                "T_action2world": T_action2world.get_matrix().squeeze(0),
-            }
+            item["pc"] = goal_points_action # Action points in goal position
+            item["pc_action"] = points_action # Action points for context
+            item["pc_anchor"] = goal_points_anchor # Anchor points in goal position
+            item["seg"] = action_seg
+            item["seg_anchor"] = anchor_seg
+            item["flow"] = gt_flow
+            item["T_goal2world"] = T_goal2world.get_matrix().squeeze(0)
+            item["T_action2world"] = T_action2world.get_matrix().squeeze(0)
         return item
 
 
@@ -196,18 +200,28 @@ class ProcClothPointDataset(data.Dataset):
     
     def __getitem__(self, index):
         # load data
-        demo = np.load(self.dataset_dir / f"demo_{index}.npz")
+        demo = np.load(self.dataset_dir / f"demo_{index}.npz", allow_pickle=True)
         action_pc = torch.as_tensor(demo["action_pc"]).float()
         action_seg = torch.as_tensor(demo["action_seg"]).int()
         anchor_pc = torch.as_tensor(demo["anchor_pc"]).float()
         anchor_seg = torch.as_tensor(demo["anchor_seg"]).int()
         speed_factor = torch.as_tensor(demo["speed_factor"]).float()
         flow = torch.as_tensor(demo["flow"]).float()
-        rot = demo["rot"]
-        trans=demo["trans"]
+        rot = torch.as_tensor(demo["rot"]).float()
+        trans = torch.as_tensor(demo["trans"]).float()
+
+        # initializing item
+        item = {
+            "speed_factor": speed_factor,
+            "rot": rot,
+            "trans": trans,
+        }
+        # legacy, because some old demos don't have this field
+        if "deform_params" in demo:
+            item["deform_params"] = demo["deform_params"].item()
 
         # downsample action
-        if action_pc.shape[0] > self.sample_size_action:
+        if self.sample_size_action > 0 and action_pc.shape[0] > self.sample_size_action:
             action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
             action_pc = action_pc.squeeze(0)
             action_seg = action_seg[action_pc_indices.squeeze(0)]
@@ -268,19 +282,28 @@ class ProcClothPointDataset(data.Dataset):
         T_action2world = Translate(action_center.unsqueeze(0))
 
 
-        return {
-            "pc": goal_points_action, # Action points in goal position
-            "pc_action": points_action, # Action points for context
-            "pc_anchor": goal_points_anchor, # Anchor points in goal position
-            "seg": action_seg,
-            "seg_anchor": anchor_seg,
-            "speed_factor": speed_factor,
-            "flow": flow,
-            "rot": rot,
-            "trans": trans,
-            "T_goal2world": T_goal2world.get_matrix().squeeze(0),
-            "T_action2world": T_action2world.get_matrix().squeeze(0),
-        }
+        # return {
+        #     "pc": goal_points_action, # Action points in goal position
+        #     "pc_action": points_action, # Action points for context
+        #     "pc_anchor": goal_points_anchor, # Anchor points in goal position
+        #     "seg": action_seg,
+        #     "seg_anchor": anchor_seg,
+        #     "speed_factor": speed_factor,
+        #     "flow": flow,
+        #     "rot": rot,
+        #     "trans": trans,
+        #     "T_goal2world": T_goal2world.get_matrix().squeeze(0),
+        #     "T_action2world": T_action2world.get_matrix().squeeze(0),
+        # }
+        item["pc"] = goal_points_action # Action points in goal position
+        item["pc_action"] = points_action # Action points for context
+        item["pc_anchor"] = goal_points_anchor # Anchor points in goal position
+        item["seg"] = action_seg 
+        item["seg_anchor"] = anchor_seg
+        item["flow"] = flow
+        item["T_goal2world"] = T_goal2world.get_matrix().squeeze(0)
+        item["T_action2world"] = T_action2world.get_matrix().squeeze(0)
+        return item
 
 DATASET_FN = {
     "cloth": ProcClothFlowDataset,
@@ -332,6 +355,7 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True if self.stage == "train" else False,
             num_workers=self.num_workers,
+            collate_fn=cloth_collate_fn,
         )
     
     def val_dataloader(self):
@@ -340,20 +364,38 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             batch_size=self.val_batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=cloth_collate_fn,
         )
         val_ood_dataloader = data.DataLoader(
             self.val_ood_dataset,
             batch_size=self.val_batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=cloth_collate_fn,
         )
         return val_dataloader, val_ood_dataloader
+
+
+# custom collate function to handle deform params
+def cloth_collate_fn(batch):
+    # batch is a list of dictionaries
+    # we need to convert it to a dictionary of lists
+    keys = batch[0].keys()
+    out = {k: None for k in keys}
+
+    for k in keys:
+        if k == "deform_params":
+            out[k] = [item[k] for item in batch]
+        else:
+            out[k] = torch.stack([item[k] for item in batch])
+    return out
+
 
 if __name__ == "__main__":
     dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_2/val")
     import rpad.visualize_3d.plots as vpl
     for i in range(40):
-        demo = np.load(dir / f"demo_{i}.npz")
+        demo = np.load(dir / f"demo_{i}.npz", allow_pickle=True)
         action = demo["action_pc"]
         anchor = demo["anchor_pc"]
         action_seg = demo["action_seg"]
@@ -361,6 +403,12 @@ if __name__ == "__main__":
         flow = demo["flow"]
         goal = action + flow
         
+        dp = demo["deform_params"]
+
+
+
+        breakpoint()
+        break
 
         # action = torch.tensor(action).float()
         # action, indices = downsample_pcd(action.unsqueeze(0), 512, type="fps")

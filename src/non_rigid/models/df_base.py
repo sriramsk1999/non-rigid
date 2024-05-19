@@ -358,6 +358,8 @@ class FlowPredictionInferenceModule(L.LightningModule):
         """
         pc_action = batch["pc_action"].to(self.device)
         bs = pc_action.shape[0]
+        # sample size adapts to input batch for inference
+        sample_size = pc_action.shape[1]
         pc_action = expand_pcd(pc_action, num_samples).transpose(-1, -2)
         model_kwargs = dict(x0=pc_action)
         # if cross attention, pass in additional data
@@ -367,7 +369,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
             model_kwargs["y"] = pc_anchor
 
         # generating latents and running diffusion
-        z = torch.randn(bs * num_samples, 3, self.sample_size, device=self.device)
+        z = torch.randn(bs * num_samples, 3, sample_size, device=self.device)
         pred_flow, results = self.diffusion.p_sample_loop(
             self.network,
             z.shape,
@@ -379,13 +381,13 @@ class FlowPredictionInferenceModule(L.LightningModule):
         )
         pred_flow = pred_flow.permute(0, 2, 1)
         if unflatten:
-            pred_flow = pred_flow.reshape(bs, num_samples, self.sample_size, -1)
+            pred_flow = pred_flow.reshape(bs, num_samples, sample_size, -1)
         
         for key in model_kwargs:
             if key in ["pos", "y", "x0"]:
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
-                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
+                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, sample_size, -1)
         
         pred_action = pc_action.transpose(-1, -2) + pred_flow
 
@@ -843,6 +845,8 @@ class PointPredictionInferenceModule(L.LightningModule):
         pc_action = batch["pc_action"].to(self.device)
         pc_anchor = batch["pc_anchor"].to(self.device)
         bs = pc_action.shape[0]
+        # sample size adapts to input batch for inference
+        sample_size = pc_action.shape[1]
         # reshape, create model kwargs, diffuse, return results, compute errors in wta function
         pc_action = expand_pcd(pc_action, num_samples).transpose(-1, -2)
         pc_anchor = expand_pcd(pc_anchor, num_samples).transpose(-1, -2)
@@ -852,7 +856,7 @@ class PointPredictionInferenceModule(L.LightningModule):
         )
         # generating latents and running diffusion
         z = (
-            torch.randn(bs * num_samples, 3, self.sample_size, device=self.device)
+            torch.randn(bs * num_samples, 3, sample_size, device=self.device)
             * self.noise_scale
         )
         pred_action, results = self.diffusion.p_sample_loop(
@@ -866,14 +870,14 @@ class PointPredictionInferenceModule(L.LightningModule):
         )
         pred_action = pred_action.permute(0, 2, 1)
         if unflatten:
-            pred_action = pred_action.reshape(bs, num_samples, self.sample_size, -1)
+            pred_action = pred_action.reshape(bs, num_samples, sample_size, -1)
 
         for key in model_kwargs:
             if key in ["x0", "y"]:
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
                     model_kwargs[key] = model_kwargs[key].reshape(
-                        bs, num_samples, self.sample_size, -1
+                        bs, num_samples, sample_size, -1
                     )
 
         # TODO: might makes more sense for this to always return predflow, just expand
