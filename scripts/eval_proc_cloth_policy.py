@@ -24,6 +24,8 @@ from dedo.utils.pcd_utils import visualize_data, render_video
 import pybullet as p
 from tqdm import tqdm
 
+import rpad.visualize_3d.plots as vpl
+
 
 def policy_simple(obs, act, task, step, speed_factor=1.0):
     """A very simple default policy."""
@@ -52,13 +54,28 @@ def policy_simple(obs, act, task, step, speed_factor=1.0):
         act[:, 2] = 0.1  # decrease z
     return act.reshape(-1) * speed_factor
 
-def get_action(model, obs):
-    return
+def get_action(env, step, goal1, goal2):
+    _, verts = p.getMeshData(env.deform_id, flags=p.MESH_DATA_SIMULATION_MESH)
+    verts = np.array(verts)
+    flow1 = goal1 - verts[env.deform_params['node_density'] - 1]
+    flow2 = goal2 - verts[0]
+
+    a1 = flow1 * 0.2 / 5
+    scale = ( env.max_episode_len  - step ) / env.max_episode_len
+    if np.linalg.norm(a1) < 0.3:
+        a1 = a1 / np.linalg.norm(a1) * 0.3
+    a2 = flow2 * 0.2 / 5
+    if np.linalg.norm(a2) < 0.3:
+        a2 = a2 / np.linalg.norm(a2) * 0.3
+    act = np.concatenate([a1, a2], dtype=np.float32)
+    return act
 
 # def play(env, model, num_episodes, args):
 def play(env, pred_flows, rot, trans, deform_params=None):
     num_episodes = pred_flows.shape[0]
     num_successes = 0
+    env.max_episode_len = 400
+    centroid_dist = 0.0
 
     if deform_params is None:
         deform_params = {
@@ -74,21 +91,33 @@ def play(env, pred_flows, rot, trans, deform_params=None):
         # print('------------ Play episode ', epsd, '------------------')
         if epsd > 0:
             obs = env.reset(rigid_trans=trans, rigid_rot=rot, deform_params=deform_params)
-        pred_flow = pred_flows[epsd]
-        a1_act = pred_flow[deform_params['node_density'] - 1] * 0.2 / 6.36
-        a2_act = pred_flow[0] * 0.2 / 6.36
-        act = torch.cat([a1_act, a2_act], dim=0).cpu().numpy()
+        pred_flow = pred_flows[epsd].cpu().numpy()
+        # a1_act = pred_flow[deform_params['node_density'] - 1]
+        # a2_act = pred_flow[0]
+        # a1_act = a1_act * 0.2 / 6.36
+        # a2_act = a2_act * 0.2 / 6.36
+        # act = np.concatenate([a1_act, a2_act], dtype=np.float32)
+
+        # get the ground truth mesh
+        _, verts = p.getMeshData(env.deform_id, flags=p.MESH_DATA_SIMULATION_MESH)
+        verts = np.array(verts)
+        goal1 = verts[deform_params['node_density'] - 1] + pred_flow[deform_params['node_density'] - 1]
+        goal2 = verts[0] + pred_flow[0]
 
         step = 0
         while True:
             assert (not isinstance(env.action_space, gym.spaces.Discrete))
+            act = get_action(env, step, goal1, goal2)
+            # print('action: ', act)
             next_obs, rwd, done, info = env.step(act)
             if done:
-                centroid_check = env.check_centroid()
+                centroid_check, centroid_dists = env.check_centroid()
+                centroid_dist += np.min(centroid_dists)
                 # success = env.check_success(debug=False)
                 info = env.end_episode(rwd)
                 polygon_check = env.check_polygon()
                 success = np.any(centroid_check * polygon_check)
+                # print(success, centroid_check, polygon_check, centroid_dist)
                 #success = env.check_success2(debug=False)
                 if success:
                     num_successes += 1
@@ -98,23 +127,41 @@ def play(env, pred_flows, rot, trans, deform_params=None):
             obs = next_obs
             step += 1
         
-        
 
         # input('Episode ended; press Enter to continue...')
         # env.close()
-    return num_successes
+    return num_successes, np.mean(centroid_dist)
 
 
 def model_predict(cfg, model, batch):
-    pred_dict = model.predict(batch, cfg.inference.num_trials)
+    pred_dict = model.predict(batch, cfg.inference.num_trials, progress=False)
     pred_flow = pred_dict["pred_world_flow"]
 
     # computing final predicted goal pose
     if cfg.model.type == "flow":
         seg = batch["seg"].to(f'cuda:{cfg.resources.gpus[0]}')
         pred_flow = pred_flow[:, seg.squeeze(0) == 1, :]
+
+    
     return pred_flow
 
+
+def eval_dataset(cfg, env, dataloader, model):
+    total_successes = 0
+    centroid_dists = []
+    for batch in tqdm(dataloader):
+        rot = batch["rot"].squeeze().numpy()
+        trans = batch["trans"].squeeze().numpy()
+        if "deform_params" in batch:
+            deform_params = batch["deform_params"][0]
+        else:
+            deform_params = None
+
+        pred_flow = model_predict(cfg, model, batch)
+        successes, centroid_dist = play(env, pred_flow, rot, trans, deform_params)
+        total_successes += successes
+        centroid_dists.append(centroid_dist)
+    return total_successes, np.mean(centroid_dists)
 
 @torch.no_grad()
 @hydra.main(config_path='../configs', config_name='eval_policy', version_base="1.3")
@@ -222,7 +269,28 @@ def main(cfg):
     EVAL_VAL = True
     EVAL_VAL_OOD = True
 
-    if EVAL_TRAIN:
+
+    if cfg.eval.train:
+        print('Evaluating on training data...')
+        total_successes, centroid_dist = eval_dataset(cfg, env, train_dataloader, model)
+        print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
+        print('Mean centroid distance: ', centroid_dist)
+
+    if cfg.eval.val:
+        print('Evaluating on validation data...')
+        total_successes, centroid_dist = eval_dataset(cfg, env, val_dataloader, model)
+        print('Total successes on validation data: ', total_successes, '/', len(val_dataloader))
+        print('Mean centroid distance: ', centroid_dist)
+
+    if cfg.eval.val_ood:
+        print('Evaluating on ood validation data...')
+        total_successes, centroid_dist = eval_dataset(cfg, env, val_ood_dataloader, model)
+        print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))
+        print('Mean centroid distance: ', centroid_dist)
+
+
+    quit()
+    if cfg.eval.train:
         print('Evaluating on training data...')
         total_successes = 0
         for batch in tqdm(train_dataloader):
@@ -238,7 +306,7 @@ def main(cfg):
             total_successes += play(env, pred_flow, rot, trans, deform_params)
         print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
 
-    if EVAL_VAL:
+    if cfg.eval.val:
         print('Evaluating on validation data...')
         total_successes = 0
         for batch in tqdm(val_dataloader):
@@ -250,10 +318,10 @@ def main(cfg):
                 deform_params = None
 
             pred_flows = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flows, rot, trans)
+            total_successes += play(env, pred_flows, rot, trans, deform_params)
         print('Total successes on validation data: ', total_successes, '/', len(val_dataloader))
 
-    if EVAL_VAL_OOD:
+    if cfg.eval.val_ood:
         print('Evaluating on ood validation data...')
         total_successes = 0
         for batch in tqdm(val_ood_dataloader):
@@ -265,7 +333,7 @@ def main(cfg):
                 deform_params = None
 
             pred_flows = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flows, rot, trans)
+            total_successes += play(env, pred_flows, rot, trans, deform_params)
         print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))
 
 

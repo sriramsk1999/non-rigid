@@ -150,8 +150,8 @@ def main(cfg):
     MMD_METRICS = True
     PRECISION_METRICS = False
 
-    VISUALIZE_PREDS = True
-    VISUALIZE_SINGLE = True
+    VISUALIZE_PREDS = False
+    VISUALIZE_SINGLE = False
 
 
 
@@ -275,40 +275,40 @@ def main(cfg):
         fig_wta.show()
 
 
-    if PRECISION_METRICS:
-        model.to(device)
-        # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-        #train_dataset = ProcClothFlowDataset(data_root, "train")
-        #val_dataset = ProcClothFlowDataset(data_root, "val")
-        num_samples = cfg.inference.num_wta_trials
-        # generate predictions
-        action_input = train_dataset[0]["pc"].unsqueeze(0).to(device)
-        pos, pred_flows = model.predict(action_input, num_samples, False)
+    # if PRECISION_METRICS:
+        # model.to(device)
+        # # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+        # #train_dataset = ProcClothFlowDataset(data_root, "train")
+        # #val_dataset = ProcClothFlowDataset(data_root, "val")
+        # num_samples = cfg.inference.num_wta_trials
+        # # generate predictions
+        # action_input = train_dataset[0]["pc"].unsqueeze(0).to(device)
+        # pos, pred_flows = model.predict(action_input, num_samples, False)
 
-        # top - down heat map
-        preds = (pos + pred_flows).cpu().numpy().reshape(-1, 3)
-        fig = px.density_heatmap(x=preds[:, 0], y=preds[:, 1], 
-                                 nbinsx=100, nbinsy=100,
-                                 title="Predicted Flows XY Heatmap")
-        fig.show()
+        # # top - down heat map
+        # preds = (pos + pred_flows).cpu().numpy().reshape(-1, 3)
+        # fig = px.density_heatmap(x=preds[:, 0], y=preds[:, 1], 
+        #                          nbinsx=100, nbinsy=100,
+        #                          title="Predicted Flows XY Heatmap")
+        # fig.show()
 
-        # load val dataset at once
-        val_flows = []
-        for i in range(len(val_dataset)):
-            val_flows.append(val_dataset[i]["flow"])
-        val_flows = torch.stack(val_flows).to(device)
+        # # load val dataset at once
+        # val_flows = []
+        # for i in range(len(val_dataset)):
+        #     val_flows.append(val_dataset[i]["flow"])
+        # val_flows = torch.stack(val_flows).to(device)
  
-        precision_rmses = []
-        for i in tqdm(range(pred_flows.shape[0])):
-            pf = pred_flows[[i]].expand(val_flows.shape[0], -1, -1)
-            rmse = flow_rmse(pf, val_flows, mask=False, seg=None)
-            rmse_match = torch.min(rmse)
-            precision_rmses.append(rmse_match)
-        precision_rmses = torch.stack(precision_rmses)
-        fig = px.histogram(precision_rmses.cpu().numpy(), 
-                           nbins=20, title="Precision RMSE")
-        fig.show()
-        print(precision_rmses.mean())
+        # precision_rmses = []
+        # for i in tqdm(range(pred_flows.shape[0])):
+        #     pf = pred_flows[[i]].expand(val_flows.shape[0], -1, -1)
+        #     rmse = flow_rmse(pf, val_flows, mask=False, seg=None)
+        #     rmse_match = torch.min(rmse)
+        #     precision_rmses.append(rmse_match)
+        # precision_rmses = torch.stack(precision_rmses)
+        # fig = px.histogram(precision_rmses.cpu().numpy(), 
+        #                    nbins=20, title="Precision RMSE")
+        # fig.show()
+        # print(precision_rmses.mean())
 
 
     if VISUALIZE_PREDS:
