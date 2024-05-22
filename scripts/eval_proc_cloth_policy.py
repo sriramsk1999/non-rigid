@@ -189,6 +189,22 @@ def main(cfg):
     # Global seed for reproducibility.
     L.seed_everything(42)
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+
+    # based on multi cloth dataset, update data root
+    if "multi_cloth" in cfg.dataset:
+        if cfg.dataset.multi_cloth.hole == "single":
+            print("Running metric evals on single-hole dataset.")
+            data_root = data_root / "multi_cloth_1/"
+        elif cfg.dataset.multi_cloth.hole == "double":
+            print("Running metric evals on double-hole dataset.")
+            data_root = data_root / "multi_cloth_2/"
+        elif cfg.dataset.multi_cloth.hole == "all":
+            print("Running metric evals on single- and double-hole dataset.")
+            data_root = data_root / "multi_cloth_all/"
+        else:
+            raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
+
+
     if cfg.dataset.type not in ["cloth", "cloth_point"]:
         raise NotImplementedError('This script is only for cloth evaluations.')
     

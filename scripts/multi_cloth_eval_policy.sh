@@ -24,6 +24,7 @@ if [ $MODEL_TYPE == "scene_flow" ]; then
     dataset=pc_multi_cloth \
     dataset.scene=True \
     dataset.world_frame=True \
+    inference.action_full=True \
     checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
     $COMMAND
 
@@ -36,6 +37,7 @@ python eval_proc_cloth_policy.py \
     dataset=pc_multi_cloth \
     dataset.scene=False \
     dataset.world_frame=True \
+    inference.action_full=True \
     checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
     $COMMAND
 
@@ -48,6 +50,7 @@ elif [ $MODEL_TYPE == "cross_flow_relative" ]; then
     dataset=pc_multi_cloth \
     dataset.scene=False \
     dataset.world_frame=False \
+    inference.action_full=True \
     checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
     $COMMAND
 
@@ -58,6 +61,7 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   python eval_proc_cloth_policy.py \
     model=df_point_cross \
     dataset=pc_multi_cloth_point \
+    inference.action_full=True \
     checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
     $COMMAND
 

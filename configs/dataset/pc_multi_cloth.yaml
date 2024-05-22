@@ -1,5 +1,5 @@
 name: pc_multi_cloth
-data_dir: "~/datasets/nrp/ProcCloth/multi_cloth_1/"
+data_dir: "~/datasets/nrp/ProcCloth/"
 type: cloth
 sample_size_action: 512
 sample_size_anchor: 512
