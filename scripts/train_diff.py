@@ -57,6 +57,19 @@ def main(cfg):
     ######################################################################
 
     data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+
+    # based on multi cloth dataset, update data root
+    if "multi_cloth" in cfg.dataset:
+        if cfg.dataset.multi_cloth.hole == "single":
+            data_root = data_root / "multi_cloth_1/"
+        elif cfg.dataset.multi_cloth.hole == "double":
+            data_root = data_root / "multi_cloth_2/"
+        elif cfg.dataset.multi_cloth.hole == "all":
+            data_root = data_root / "multi_cloth_all/"
+        else:
+            raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
+
+
     if cfg.dataset.type in ["articulated", "articulated_multi"]:
         dm = MicrowaveFlowDataModule
     elif cfg.dataset.type in ["cloth", "cloth_point"]:
@@ -245,7 +258,24 @@ def main(cfg):
     # Train the model.
     ######################################################################
 
-    trainer.fit(model, datamodule=datamodule)
+    # this might be a little too "pythonic"
+    if cfg.checkpoint.run_id:
+        print("Attempting to resume training from checkpoint: ", cfg.checkpoint.reference)
+
+        api = wandb.Api()
+        artifact_dir = cfg.wandb.artifact_dir
+        artifact = api.artifact(cfg.checkpoint.reference, type="model")
+        ckpt_file = artifact.get_path("model.ckpt").download(root=artifact_dir)
+        # ckpt = torch.load(ckpt_file)
+        # # model.load_state_dict(
+        # #     {k.partition(".")[2]: v for k, v, in ckpt["state_dict"].items()}
+        # # )
+        # model.load_state_dict(ckpt["state_dict"])
+    else:
+        print("Starting training from scratch.")
+        ckpt_file = None
+
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_file)
 
 
 if __name__ == "__main__":
