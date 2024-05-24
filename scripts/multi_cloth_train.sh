@@ -54,6 +54,18 @@ elif [ $MODEL_TYPE == "cross_flow_relative" ]; then
     wandb.group=pc_multi_cloth \
     resources.gpus=[${GPU_INDEX}] \
     $COMMAND
+# world frame cross point
+elif [ $MODEL_TYPE == "cross_point_absolute" ]; then
+  echo "Training absolute point model with command: $COMMAND."
+
+  WANDB_MODE=$WANDB_MODE python train_diff.py \
+    model=df_point_cross \
+    dataset=pc_multi_cloth_point \
+    dataset.scene=False \
+    dataset.world_frame=True \
+    wandb.group=pc_multi_cloth \
+    resources.gpus=[${GPU_INDEX}] \
+    $COMMAND
 # relative frame ghost point
 elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   echo "Training relative point model with command: $COMMAND."
@@ -61,11 +73,11 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   WANDB_MODE=$WANDB_MODE python train_diff.py \
     model=df_point_cross \
     dataset=pc_multi_cloth_point \
+    dataset.scene=False \
     dataset.world_frame=False \
     wandb.group=pc_multi_cloth \
     resources.gpus=[${GPU_INDEX}] \
     $COMMAND
-
 else
   echo "Invalid model type."
 fi

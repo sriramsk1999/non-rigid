@@ -35,17 +35,17 @@ class ProcClothFlowDataset(data.Dataset):
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
         self.world_frame = self.dataset_cfg.world_frame
-        if self.scene and not self.world_frame:
-            raise ValueError("Scene inputs require a world frame.")
-        # if world frame, manually override data pre-processing
-        if self.world_frame:
-            print("-------Overriding data pre-processing for world frame.-------")
-            self.dataset_cfg.center_type = "none"
-            self.dataset_cfg.action_context_center_type = "none"
-            self.dataset_cfg.action_transform_type = "identity"
-            self.dataset_cfg.anchor_transform_type = "identity"
-            self.dataset_cfg.rotation_variance = 0.0
-            self.dataset_cfg.translation_variance = 0.0
+        # if self.scene and not self.world_frame:
+        #     raise ValueError("Scene inputs require a world frame.")
+        # # if world frame, manually override data pre-processing
+        # if self.world_frame:
+        #     print("-------Overriding data pre-processing for world frame.-------")
+        #     self.dataset_cfg.center_type = "none"
+        #     self.dataset_cfg.action_context_center_type = "none"
+        #     self.dataset_cfg.action_transform_type = "identity"
+        #     self.dataset_cfg.anchor_transform_type = "identity"
+        #     self.dataset_cfg.rotation_variance = 0.0
+        #     self.dataset_cfg.translation_variance = 0.0
         
     
     def __len__(self):
@@ -91,15 +91,7 @@ class ProcClothFlowDataset(data.Dataset):
             scene_seg = torch.cat([action_seg, anchor_seg], dim=0)
             anchor_flow = torch.zeros_like(anchor_pc)
             scene_flow = torch.cat([flow, anchor_flow], dim=0)
-            # item = {
-            #     "pc": scene_pc + scene_flow, # Scene points in goal position
-            #     "pc_action": scene_pc, # Scene points in starting position
-            #     "seg": scene_seg, 
-            #     "flow": scene_flow,
-            #     "speed_factor": speed_factor,
-            #     "rot": rot,
-            #     "trans": trans,
-            # }
+
             item["pc"] = scene_pc + scene_flow # Scene points in goal position
             item["pc_action"] = scene_pc # Scene points in starting position
             item["seg"] = scene_seg
@@ -154,23 +146,15 @@ class ProcClothFlowDataset(data.Dataset):
                 raise ValueError(f"Unknown action context center type: {self.dataset_cfg.action_context_center_type}")
 
             points_action = action_pc - action_center
-            T_action2world = Translate(action_center.unsqueeze(0))
+            points_action = T0.transform_points(points_action)
+            T_action2world = T0.inverse().compose(
+                Translate(action_center.unsqueeze(0))
+            )
+            #T_action2world = Translate(action_center.unsqueeze(0))
 
             # Get the flow
             gt_flow = goal_points_action - points_action
-            # item = {
-            #     "pc": goal_points_action, # Action points in goal position
-            #     "pc_action": points_action, # Action points for context
-            #     "pc_anchor": goal_points_anchor, # Anchor points in goal position
-            #     "seg": action_seg,
-            #     "seg_anchor": anchor_seg,
-            #     "speed_factor": speed_factor,
-            #     "flow": gt_flow, # flow in goal position
-            #     "rot": rot,
-            #     "trans": trans,
-            #     "T_goal2world": T_goal2world.get_matrix().squeeze(0),
-            #     "T_action2world": T_action2world.get_matrix().squeeze(0),
-            # }
+
             item["pc"] = goal_points_action # Action points in goal position
             item["pc_action"] = points_action # Action points for context
             item["pc_anchor"] = goal_points_anchor # Anchor points in goal position
@@ -192,18 +176,19 @@ class ProcClothPointDataset(data.Dataset):
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
 
         self.dataset_cfg = dataset_cfg
+        self.scene = self.dataset_cfg.scene
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
         self.world_frame = self.dataset_cfg.world_frame
-        # if world frame, manually override data pre-processing
-        if self.world_frame:
-            print("-------Overriding data pre-processing for world frame.-------")
-            self.dataset_cfg.center_type = "none"
-            self.dataset_cfg.action_context_center_type = "none"
-            self.dataset_cfg.action_transform_type = "identity"
-            self.dataset_cfg.anchor_transform_type = "identity"
-            self.dataset_cfg.rotation_variance = 0.0
-            self.dataset_cfg.translation_variance = 0.0
+        # # if world frame, manually override data pre-processing
+        # if self.world_frame:
+        #     print("-------Overriding data pre-processing for world frame.-------")
+        #     self.dataset_cfg.center_type = "none"
+        #     self.dataset_cfg.action_context_center_type = "none"
+        #     self.dataset_cfg.action_transform_type = "identity"
+        #     self.dataset_cfg.anchor_transform_type = "identity"
+        #     self.dataset_cfg.rotation_variance = 0.0
+        #     self.dataset_cfg.translation_variance = 0.0
 
     def __len__(self):
         return self.num_demos
@@ -258,15 +243,7 @@ class ProcClothPointDataset(data.Dataset):
         goal_points_action = points_action - center
         goal_points_anchor = points_anchor - center
 
-        # Downsample the point clouds (for now, this is only for anchor)
-        # goal_points_anchor, _ = downsample_pcd(
-        #     goal_points_anchor.unsqueeze(0),
-        #     num_points=self.dataset_cfg.sample_size_anchor,
-        #     type=self.dataset_cfg.downsample_type,
-        # )
-        # goal_points_anchor = goal_points_anchor.squeeze(0)
-
-        # Transform the point clouds
+        # Randomly transform the point clouds
         T0 = random_se3(
             N=1,
             rot_var=self.dataset_cfg.rotation_variance,
@@ -285,12 +262,7 @@ class ProcClothPointDataset(data.Dataset):
         T_goal2world = T1.inverse().compose(
             Translate(center.unsqueeze(0))
         )
-
-        # Get starting action point cloud (TODO: eventually, include T0)
-        # action_center = action_pc.mean(axis=0)
-        # points_action = action_pc - action_center
-        # T_action2world = Translate(action_center.unsqueeze(0))
-
+        
         if self.dataset_cfg.action_context_center_type == "center":
             action_center = action_pc.mean(axis=0)
         elif self.dataset_cfg.action_context_center_type == "random":
@@ -301,21 +273,12 @@ class ProcClothPointDataset(data.Dataset):
             raise ValueError(f"Unknown action context center type: {self.dataset_cfg.action_context_center_type}")
 
         points_action = action_pc - action_center
-        T_action2world = Translate(action_center.unsqueeze(0))
+        points_action = T0.transform_points(points_action)
+        T_action2world = T0.inverse().compose(
+            Translate(action_center.unsqueeze(0))
+        )
+        # T_action2world = Translate(action_center.unsqueeze(0))
 
-        # return {
-        #     "pc": goal_points_action, # Action points in goal position
-        #     "pc_action": points_action, # Action points for context
-        #     "pc_anchor": goal_points_anchor, # Anchor points in goal position
-        #     "seg": action_seg,
-        #     "seg_anchor": anchor_seg,
-        #     "speed_factor": speed_factor,
-        #     "flow": flow,
-        #     "rot": rot,
-        #     "trans": trans,
-        #     "T_goal2world": T_goal2world.get_matrix().squeeze(0),
-        #     "T_action2world": T_action2world.get_matrix().squeeze(0),
-        # }
         item["pc"] = goal_points_action # Action points in goal position
         item["pc_action"] = points_action # Action points for context
         item["pc_anchor"] = goal_points_anchor # Anchor points in goal position
@@ -347,6 +310,28 @@ class ProcClothFlowDataModule(L.LightningDataModule):
 
     def setup(self, stage: str = "train"):
         self.stage = stage
+
+        # dataset sanity checks
+        if self.dataset_cfg.scene and not self.dataset_cfg.world_frame:
+            raise ValueError("Scene inputs require a world frame.")
+
+        # if not in train mode, don't use rotation augmentations
+        if self.stage != "train":
+            print("-------Turning off rotation augmentation for validation/inference.-------")
+            self.dataset_cfg.action_transform_type = "identity"
+            self.dataset_cfg.anchor_transform_type = "identity"
+            self.dataset_cfg.rotation_variance = 0.0
+            self.dataset_cfg.translation_variance = 0.0
+        # if world frame, don't pre-process point clouds at all
+        if self.dataset_cfg.world_frame:
+            print("-------Turning off all data pre-processing for world frame predictions.-------")
+            self.dataset_cfg.center_type = "none"
+            self.dataset_cfg.action_context_center_type = "none"
+            self.dataset_cfg.action_transform_type = "identity"
+            self.dataset_cfg.anchor_transform_type = "identity"
+            self.dataset_cfg.rotation_variance = 0.0
+            self.dataset_cfg.translation_variance = 0.0
+
         # TODO: this needs to be fixed later
         if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
             train_type = f"train_{self.dataset_cfg.multi_cloth.size}"

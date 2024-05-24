@@ -222,7 +222,7 @@ def main(cfg):
         dataset_cfg=cfg.dataset,
     )
     # We don't actually need the module, we just need to setup for val + val_ood datasets
-    datamodule.setup(stage="val")
+    datamodule.setup(stage="predict")
 
 
     # LOAD THE MODEL ###
