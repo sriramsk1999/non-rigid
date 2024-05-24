@@ -245,7 +245,7 @@ def main(cfg):
     else:
         ckpt_file = checkpoint_reference
     # Load the network weights.
-    ckpt = torch.load(ckpt_file)
+    ckpt = torch.load(ckpt_file, map_location="cuda:0")
     network.load_state_dict(
         {k.partition(".")[2]: v for k, v, in ckpt["state_dict"].items()}
     )

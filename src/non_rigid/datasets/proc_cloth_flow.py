@@ -194,6 +194,16 @@ class ProcClothPointDataset(data.Dataset):
         self.dataset_cfg = dataset_cfg
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
+        self.world_frame = self.dataset_cfg.world_frame
+        # if world frame, manually override data pre-processing
+        if self.world_frame:
+            print("-------Overriding data pre-processing for world frame.-------")
+            self.dataset_cfg.center_type = "none"
+            self.dataset_cfg.action_context_center_type = "none"
+            self.dataset_cfg.action_transform_type = "identity"
+            self.dataset_cfg.anchor_transform_type = "identity"
+            self.dataset_cfg.rotation_variance = 0.0
+            self.dataset_cfg.translation_variance = 0.0
 
     def __len__(self):
         return self.num_demos
@@ -242,7 +252,7 @@ class ProcClothPointDataset(data.Dataset):
         elif self.dataset_cfg.center_type == "anchor_random":
             center = points_anchor[np.random.choice(len(points_anchor))]
         elif self.dataset_cfg.center_type == "none":
-            center = np.zeros(3)
+            center = torch.zeros(3, dtype=torch.float32)
         else:
             raise ValueError(f"Unknown center type: {self.dataset_cfg.center_type}")
         goal_points_action = points_action - center
@@ -277,10 +287,21 @@ class ProcClothPointDataset(data.Dataset):
         )
 
         # Get starting action point cloud (TODO: eventually, include T0)
-        action_center = action_pc.mean(axis=0)
+        # action_center = action_pc.mean(axis=0)
+        # points_action = action_pc - action_center
+        # T_action2world = Translate(action_center.unsqueeze(0))
+
+        if self.dataset_cfg.action_context_center_type == "center":
+            action_center = action_pc.mean(axis=0)
+        elif self.dataset_cfg.action_context_center_type == "random":
+            action_center = action_pc[np.random.choice(len(action_pc))]
+        elif self.dataset_cfg.action_context_center_type == "none":
+            action_center = torch.zeros(3, dtype=torch.float32)
+        else:
+            raise ValueError(f"Unknown action context center type: {self.dataset_cfg.action_context_center_type}")
+
         points_action = action_pc - action_center
         T_action2world = Translate(action_center.unsqueeze(0))
-
 
         # return {
         #     "pc": goal_points_action, # Action points in goal position
@@ -321,22 +342,18 @@ class ProcClothFlowDataModule(L.LightningDataModule):
         self.stage = None
         self.dataset_cfg = dataset_cfg
 
-        # TODO: fill the rest of this out
-        # pre-processing if dataset is multi cloth
-        # if "multi_cloth" in self.dataset_cfg:
-
-
     def prepare_data(self) -> None:
         pass
 
     def setup(self, stage: str = "train"):
         self.stage = stage
-        # self.train_dataset = ProcClothFlowDataset(self.root, self.dataset_cfg, "train")
-        # self.val_dataset = ProcClothFlowDataset(self.root, self.dataset_cfg, "val")
-        # self.val_ood_dataset = ProcClothFlowDataset(self.root, self.dataset_cfg, "val_ood")
-        
+        # TODO: this needs to be fixed later
+        if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
+            train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
+        else:
+            train_type = "train"
         self.train_dataset = DATASET_FN[self.dataset_cfg.type](
-            self.root, self.dataset_cfg, "train"
+            self.root, self.dataset_cfg, train_type
         )
         self.val_dataset = DATASET_FN[self.dataset_cfg.type](
             self.root, self.dataset_cfg, "val"
@@ -344,10 +361,6 @@ class ProcClothFlowDataModule(L.LightningDataModule):
         self.val_ood_dataset = DATASET_FN[self.dataset_cfg.type](
             self.root, self.dataset_cfg, "val_ood"
         )
-        
-        # generator = torch.Generator().manual_seed(42)
-        # self.train_set, self.val_set = torch.utils.data.random_split(
-        #     dataset, [0.9, 0.1], generator=generator
     
     def train_dataloader(self):
         return data.DataLoader(
@@ -392,9 +405,9 @@ def cloth_collate_fn(batch):
 
 
 if __name__ == "__main__":
-    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_2/val")
+    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_1/train_10")
     import rpad.visualize_3d.plots as vpl
-    for i in range(40):
+    for i in range(16):
         demo = np.load(dir / f"demo_{i}.npz", allow_pickle=True)
         action = demo["action_pc"]
         anchor = demo["anchor_pc"]
@@ -402,13 +415,6 @@ if __name__ == "__main__":
         anchor_seg = demo["anchor_seg"]
         flow = demo["flow"]
         goal = action + flow
-        
-        dp = demo["deform_params"]
-
-
-
-        breakpoint()
-        break
 
         # action = torch.tensor(action).float()
         # action, indices = downsample_pcd(action.unsqueeze(0), 512, type="fps")

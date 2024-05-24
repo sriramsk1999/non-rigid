@@ -61,6 +61,7 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   WANDB_MODE=$WANDB_MODE python train_diff.py \
     model=df_point_cross \
     dataset=pc_multi_cloth_point \
+    dataset.world_frame=False \
     wandb.group=pc_multi_cloth \
     resources.gpus=[${GPU_INDEX}] \
     $COMMAND

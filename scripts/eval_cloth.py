@@ -49,6 +49,8 @@ def main(cfg):
     # Global seed for reproducibility.
     L.seed_everything(42)
 
+    device = f"cuda:{cfg.resources.gpus[0]}"
+
     ######################################################################
     # Create the datamodule.
     # Should be the same one as in training, but we're gonna use val+test
@@ -113,7 +115,7 @@ def main(cfg):
     else:
         ckpt_file = checkpoint_reference
     # Load the network weights.
-    ckpt = torch.load(ckpt_file)
+    ckpt = torch.load(ckpt_file, map_location=device)
     network.load_state_dict(
         {k.partition(".")[2]: v for k, v, in ckpt["state_dict"].items()}
     )
@@ -162,7 +164,6 @@ def main(cfg):
     # # num_wta_trials = 50
     # diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
     
-    device = f"cuda:{cfg.resources.gpus[0]}"
     MMD_METRICS = True
     PRECISION_METRICS = False
 
