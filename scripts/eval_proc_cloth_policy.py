@@ -25,6 +25,8 @@ import pybullet as p
 from tqdm import tqdm
 
 import rpad.visualize_3d.plots as vpl
+from scipy.spatial.transform import Rotation as R
+from pytorch3d.transforms import Transform3d
 
 
 def policy_simple(obs, act, task, step, speed_factor=1.0):
@@ -281,10 +283,6 @@ def main(cfg):
     train_dataloader = datamodule.train_dataloader()
     val_dataloader, val_ood_dataloader = datamodule.val_dataloader()
 
-    EVAL_TRAIN = True
-    EVAL_VAL = True
-    EVAL_VAL_OOD = True
-
 
     if cfg.eval.train:
         print('Evaluating on training data...')
@@ -303,55 +301,6 @@ def main(cfg):
         total_successes, centroid_dist = eval_dataset(cfg, env, val_ood_dataloader, model)
         print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))
         print('Mean centroid distance: ', centroid_dist)
-
-
-    quit()
-    if cfg.eval.train:
-        print('Evaluating on training data...')
-        total_successes = 0
-        for batch in tqdm(train_dataloader):
-            # batch = {k: v.to(f'cuda:{cfg.resources.gpus[0]}') for k, v in batch.items()}
-            rot = batch["rot"].squeeze().numpy()
-            trans = batch["trans"].squeeze().numpy()
-            if "deform_params" in batch:
-                deform_params = batch["deform_params"][0]
-            else:
-                deform_params = None
-
-            pred_flow = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flow, rot, trans, deform_params)
-        print('Total successes on training data: ', total_successes, '/', len(train_dataloader))
-
-    if cfg.eval.val:
-        print('Evaluating on validation data...')
-        total_successes = 0
-        for batch in tqdm(val_dataloader):
-            rot = batch["rot"].squeeze().numpy()
-            trans = batch["trans"].squeeze().numpy()
-            if "deform_params" in batch:
-                deform_params = batch["deform_params"][0]
-            else:
-                deform_params = None
-
-            pred_flows = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flows, rot, trans, deform_params)
-        print('Total successes on validation data: ', total_successes, '/', len(val_dataloader))
-
-    if cfg.eval.val_ood:
-        print('Evaluating on ood validation data...')
-        total_successes = 0
-        for batch in tqdm(val_ood_dataloader):
-            rot = batch["rot"].squeeze().numpy()
-            trans = batch["trans"].squeeze().numpy()
-            if "deform_params" in batch:
-                deform_params = batch["deform_params"][0]
-            else:
-                deform_params = None
-
-            pred_flows = model_predict(cfg, model, batch)
-            total_successes += play(env, pred_flows, rot, trans, deform_params)
-        print('Total successes on ood validation data: ', total_successes, '/', len(val_ood_dataloader))
-
 
 if __name__ == '__main__':
     main()

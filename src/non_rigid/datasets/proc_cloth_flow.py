@@ -35,17 +35,6 @@ class ProcClothFlowDataset(data.Dataset):
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
         self.world_frame = self.dataset_cfg.world_frame
-        # if self.scene and not self.world_frame:
-        #     raise ValueError("Scene inputs require a world frame.")
-        # # if world frame, manually override data pre-processing
-        # if self.world_frame:
-        #     print("-------Overriding data pre-processing for world frame.-------")
-        #     self.dataset_cfg.center_type = "none"
-        #     self.dataset_cfg.action_context_center_type = "none"
-        #     self.dataset_cfg.action_transform_type = "identity"
-        #     self.dataset_cfg.anchor_transform_type = "identity"
-        #     self.dataset_cfg.rotation_variance = 0.0
-        #     self.dataset_cfg.translation_variance = 0.0
         
     
     def __len__(self):
@@ -150,8 +139,6 @@ class ProcClothFlowDataset(data.Dataset):
             T_action2world = T0.inverse().compose(
                 Translate(action_center.unsqueeze(0))
             )
-            #T_action2world = Translate(action_center.unsqueeze(0))
-
             # Get the flow
             gt_flow = goal_points_action - points_action
 
@@ -180,15 +167,6 @@ class ProcClothPointDataset(data.Dataset):
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
         self.world_frame = self.dataset_cfg.world_frame
-        # # if world frame, manually override data pre-processing
-        # if self.world_frame:
-        #     print("-------Overriding data pre-processing for world frame.-------")
-        #     self.dataset_cfg.center_type = "none"
-        #     self.dataset_cfg.action_context_center_type = "none"
-        #     self.dataset_cfg.action_transform_type = "identity"
-        #     self.dataset_cfg.anchor_transform_type = "identity"
-        #     self.dataset_cfg.rotation_variance = 0.0
-        #     self.dataset_cfg.translation_variance = 0.0
 
     def __len__(self):
         return self.num_demos
@@ -277,7 +255,6 @@ class ProcClothPointDataset(data.Dataset):
         T_action2world = T0.inverse().compose(
             Translate(action_center.unsqueeze(0))
         )
-        # T_action2world = Translate(action_center.unsqueeze(0))
 
         item["pc"] = goal_points_action # Action points in goal position
         item["pc_action"] = points_action # Action points for context
@@ -308,7 +285,7 @@ class ProcClothFlowDataModule(L.LightningDataModule):
     def prepare_data(self) -> None:
         pass
 
-    def setup(self, stage: str = "train"):
+    def setup(self, stage: str = "fit"):
         self.stage = stage
 
         # dataset sanity checks
@@ -316,7 +293,7 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             raise ValueError("Scene inputs require a world frame.")
 
         # if not in train mode, don't use rotation augmentations
-        if self.stage != "train":
+        if self.stage != "fit":
             print("-------Turning off rotation augmentation for validation/inference.-------")
             self.dataset_cfg.action_transform_type = "identity"
             self.dataset_cfg.anchor_transform_type = "identity"
@@ -390,7 +367,7 @@ def cloth_collate_fn(batch):
 
 
 if __name__ == "__main__":
-    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_1/train_10")
+    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_2/val_ood2")
     import rpad.visualize_3d.plots as vpl
     for i in range(16):
         demo = np.load(dir / f"demo_{i}.npz", allow_pickle=True)

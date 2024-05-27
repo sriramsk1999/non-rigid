@@ -120,7 +120,7 @@ def main(cfg):
     # and the logging.
     ######################################################################
 
-    datamodule.setup(stage="train")
+    datamodule.setup(stage="fit")
     cfg.training.num_training_steps = len(datamodule.train_dataloader()) * cfg.training.epochs
     # updating the training sample size
     # cfg.training.training_sample_size = cfg.dataset.sample_size
