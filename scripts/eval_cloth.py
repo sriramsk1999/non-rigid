@@ -1,5 +1,6 @@
 import hydra
 import lightning as L
+import json
 import omegaconf
 import torch
 import torch.utils._pytree as pytree
@@ -35,6 +36,13 @@ import rpad.visualize_3d.plots as vpl
 @torch.no_grad()
 @hydra.main(config_path="../configs", config_name="eval", version_base="1.3")
 def main(cfg):
+    print(
+        json.dumps(
+            omegaconf.OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False),
+            sort_keys=True,
+            indent=4,
+        )
+    )
     ######################################################################
     # Torch settings.
     ######################################################################

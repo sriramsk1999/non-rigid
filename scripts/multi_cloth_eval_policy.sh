@@ -53,7 +53,18 @@ elif [ $MODEL_TYPE == "cross_flow_relative" ]; then
     inference.action_full=True \
     checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
     $COMMAND
+# world frame cross point
+elif [ $MODEL_TYPE == "cross_point_absolute" ]; then
+  echo "Evaluating absolute point model at checkpoint $CHECKPOINT with command: $COMMAND."
 
+  python eval_proc_cloth_policy.py \
+    model=df_point_cross \
+    dataset=pc_multi_cloth_point \
+    dataset.scene=False \
+    dataset.world_frame=True \
+    inference.action_full=True \
+    checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
+    $COMMAND
 # relative frame ghost point
 elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   echo "Evaluating relative point model at checkpoint $CHECKPOINT with command: $COMMAND."
@@ -61,6 +72,8 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   python eval_proc_cloth_policy.py \
     model=df_point_cross \
     dataset=pc_multi_cloth_point \
+    dataset.scene=False \
+    dataset.world_frame=False \
     inference.action_full=True \
     checkpoint.reference=r-pad/non_rigid/model-${CHECKPOINT}:v0 \
     $COMMAND

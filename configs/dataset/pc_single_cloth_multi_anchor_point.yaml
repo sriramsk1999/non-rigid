@@ -4,8 +4,9 @@ type: cloth_point
 sample_size_action: 213
 sample_size_anchor: 512
 downsample_type: fps
+scene: False
 
-world_frame: True
+world_frame: False
 # Dataset pre-processing options
 center_type: anchor_center # [action_center, anchor_center, anchor_random, none], centers the point clouds w.r.t. the action, anchor, or no centering
 action_context_center_type: center # [center, random, none], centers the action context point clouds

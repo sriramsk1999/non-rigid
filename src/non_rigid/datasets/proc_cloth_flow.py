@@ -312,6 +312,8 @@ class ProcClothFlowDataModule(L.LightningDataModule):
         # TODO: this needs to be fixed later
         if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
             train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
+        elif "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 1:
+            train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
         else:
             train_type = "train"
         self.train_dataset = DATASET_FN[self.dataset_cfg.type](
