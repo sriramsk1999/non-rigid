@@ -85,6 +85,12 @@ class ProcClothFlowDataset(data.Dataset):
             points_scene = scene_pc
             goal_points_scene = scene_pc + scene_flow
 
+            # mean center about points_scene
+            center = points_scene.mean(axis=0)
+            points_scene = points_scene - center
+            goal_points_scene = goal_points_scene - center
+
+
             # TODO: random transform based on anchor transform type
             T1 = random_se3(
                 N=1,
@@ -94,7 +100,9 @@ class ProcClothFlowDataset(data.Dataset):
             )
             points_scene = T1.transform_points(points_scene)
             goal_points_scene = T1.transform_points(goal_points_scene)
-            T_goal2world = T1.inverse()
+            T_goal2world = T1.inverse().compose(
+                Translate(center.unsqueeze(0))
+            )
 
             gt_flow = goal_points_scene - points_scene
 
