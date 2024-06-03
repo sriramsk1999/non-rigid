@@ -106,12 +106,15 @@ def play(env, pred_flows, rot, trans, deform_params=None):
         goal1 = verts[deform_params['node_density'] - 1] + pred_flow[deform_params['node_density'] - 1]
         goal2 = verts[0] + pred_flow[0]
 
+        goal = np.concatenate([goal1, goal2], dtype=np.float32)
+
         step = 0
         while True:
             assert (not isinstance(env.action_space, gym.spaces.Discrete))
-            act = get_action(env, step, goal1, goal2)
+            # act = get_action(env, step, goal1, goal2)
             # print('action: ', act)
-            next_obs, rwd, done, info = env.step(act)
+            # next_obs, rwd, done, info = env.step(act)
+            next_obs, rwd, done, info = env.step(goal, unscaled=True)
             if done:
                 centroid_check, centroid_dists = env.check_centroid()
                 centroid_dist += np.min(centroid_dists)

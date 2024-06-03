@@ -29,13 +29,13 @@ class ProcClothFlowDataset(data.Dataset):
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
         # self.dataset_type = "flow"
+        print(self.dataset_dir)
 
         self.dataset_cfg = dataset_cfg
         self.scene = self.dataset_cfg.scene
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
-        self.world_frame = self.dataset_cfg.world_frame
-        
+        self.world_frame = self.dataset_cfg.world_frame        
     
     def __len__(self):
         return self.num_demos
@@ -81,10 +81,32 @@ class ProcClothFlowDataset(data.Dataset):
             anchor_flow = torch.zeros_like(anchor_pc)
             scene_flow = torch.cat([flow, anchor_flow], dim=0)
 
-            item["pc"] = scene_pc + scene_flow # Scene points in goal position
-            item["pc_action"] = scene_pc # Scene points in starting position
+
+            points_scene = scene_pc
+            goal_points_scene = scene_pc + scene_flow
+
+            # TODO: random transform based on anchor transform type
+            T1 = random_se3(
+                N=1,
+                rot_var=self.dataset_cfg.rotation_variance,
+                trans_var=self.dataset_cfg.translation_variance,
+                rot_sample_method=self.dataset_cfg.anchor_transform_type,
+            )
+            points_scene = T1.transform_points(points_scene)
+            goal_points_scene = T1.transform_points(goal_points_scene)
+            T_goal2world = T1.inverse()
+
+            gt_flow = goal_points_scene - points_scene
+
+            item["pc"] = goal_points_scene # Scene points in goal position
+            item["pc_action"] = points_scene # Scene points in starting position
             item["seg"] = scene_seg
-            item["flow"] = scene_flow
+            item["flow"] = gt_flow
+
+            # item["pc"] = scene_pc + scene_flow # Scene points in goal position
+            # item["pc_action"] = scene_pc # Scene points in starting position
+            # item["seg"] = scene_seg
+            # item["flow"] = scene_flow
         else:
             points_action = action_pc + flow
             points_anchor = anchor_pc
@@ -122,8 +144,6 @@ class ProcClothFlowDataset(data.Dataset):
             T_goal2world = T1.inverse().compose(
                 Translate(center.unsqueeze(0))
             )
-
-            # Get starting action point cloud (TODO: eventually, include T0)
 
             if self.dataset_cfg.action_context_center_type == "center":
                 action_center = action_pc.mean(axis=0)
@@ -299,31 +319,38 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             self.dataset_cfg.anchor_transform_type = "identity"
             self.dataset_cfg.rotation_variance = 0.0
             self.dataset_cfg.translation_variance = 0.0
-        # if world frame, don't pre-process point clouds at all
+        # if world frame, don't mean-center the point clouds
         if self.dataset_cfg.world_frame:
-            print("-------Turning off all data pre-processing for world frame predictions.-------")
+            print("-------Turning off mean-centering for world frame predictions.-------")
             self.dataset_cfg.center_type = "none"
             self.dataset_cfg.action_context_center_type = "none"
-            self.dataset_cfg.action_transform_type = "identity"
-            self.dataset_cfg.anchor_transform_type = "identity"
-            self.dataset_cfg.rotation_variance = 0.0
-            self.dataset_cfg.translation_variance = 0.0
+            #self.dataset_cfg.action_transform_type = "identity"
+            #self.dataset_cfg.anchor_transform_type = "identity"
+            #self.dataset_cfg.rotation_variance = 0.0
+            #self.dataset_cfg.translation_variance = 0.0
 
         # TODO: this needs to be fixed later
         if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
             train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
+            val_type = "val"
+            val_ood_type = "val_ood"
         elif "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 1:
             train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
+            val_type = f"val_{self.dataset_cfg.multi_cloth.size}"
+            val_ood_type = f"val_ood_{self.dataset_cfg.multi_cloth.size}"
         else:
             train_type = "train"
+            val_type = "val"
+            val_ood_type = "val_ood"
+        
         self.train_dataset = DATASET_FN[self.dataset_cfg.type](
             self.root, self.dataset_cfg, train_type
         )
         self.val_dataset = DATASET_FN[self.dataset_cfg.type](
-            self.root, self.dataset_cfg, "val"
+            self.root, self.dataset_cfg, val_type
         )
         self.val_ood_dataset = DATASET_FN[self.dataset_cfg.type](
-            self.root, self.dataset_cfg, "val_ood"
+            self.root, self.dataset_cfg, val_ood_type
         )
     
     def train_dataloader(self):

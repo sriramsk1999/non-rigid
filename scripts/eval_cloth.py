@@ -26,10 +26,32 @@ from non_rigid.utils.script_utils import (
 
 from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse
 from non_rigid.models.dit.diffusion import create_diffusion
+from non_rigid.utils.pointcloud_utils import expand_pcd
 from tqdm import tqdm
 import numpy as np
 
+from pytorch3d.transforms import Transform3d, Rotate, Translate, euler_angles_to_matrix
 import rpad.visualize_3d.plots as vpl
+
+
+
+def visualize_batched_point_clouds(point_clouds):
+    """
+    Helper function to visualize a list of batched point clouds. This is meant to be used 
+    when visualizing action/anchor/prediction point clouds, without having to add 
+
+    point_clouds: list of point clouds, each of shape (B, N, 3)
+    """
+    pcs = [pc.cpu().flatten(0, 1) for pc in point_clouds]
+    segs = []
+    for i, pc in enumerate(pcs):
+        segs.append(torch.ones(pc.shape[0]).int() * i)
+
+    return vpl.segmentation_fig(
+        torch.cat(pcs),
+        torch.cat(segs),
+    )
+
 
 
 
@@ -172,8 +194,8 @@ def main(cfg):
     # # num_wta_trials = 50
     # diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
     
-    MMD_METRICS = True
-    PRECISION_METRICS = False
+    MMD_METRICS = False
+    PRECISION_METRICS = True
 
     VISUALIZE_PREDS = False
     VISUALIZE_SINGLE = False
@@ -299,6 +321,103 @@ def main(cfg):
         fig.show()
         fig_wta.show()
 
+
+    if PRECISION_METRICS:
+        model.to(device)
+        # precision_dm = 2
+
+        # creating precision-specific datamodule - needs specific batch size
+        if "multi_cloth" in cfg.dataset:
+            bs = int(400 / cfg.dataset.multi_cloth.size)
+        else:
+            raise NotImplementedError("Precision metrics only supported for multi-cloth datasets.")
+        
+        # cfg.dataset.sample_size_action = -1
+        datamodule = dm(
+            root=data_root,
+            batch_size=bs,
+            val_batch_size=bs,
+            num_workers=cfg.resources.num_workers,
+            dataset_cfg=cfg.dataset,
+        )
+        # just need the dataloaders
+        datamodule.setup(stage="predict")
+        train_loader = datamodule.train_dataloader()
+        val_loader, val_ood_loader = datamodule.val_dataloader()
+
+        # TODO: PRED FLOW IS NOT IN THE SAME FRAME AS GT FLOW...
+        # ALSO WHY DO THEY GET SO MUCH WORSE FOR VAL AND VAL_OOD
+
+        if int(cfg.datset.multi_cloth.size) == 1:
+            num_samples = 1
+        else:
+            num_samples = 20
+
+        def precision_eval(dataloader, model):
+            precision_rmses = []
+            for batch in tqdm(dataloader):
+                # generate predictions
+                seg = batch["seg"].to(device)
+                pred_dict = model.predict(batch, num_samples, progress=False)
+                pred_action = pred_dict["pred_action"]#.cpu() # in goal/anchor frame
+                #print(batch.keys())
+                #print(pred_dict.keys())
+
+                # transform world-frame demo back to "origin"
+                rot = batch['rot'].to(device)
+                trans = batch['trans'].to(device)
+                pc = batch["pc"].to(device)
+                pc_anchor = batch["pc_anchor"].to(device)
+
+                T_world2origin = Translate(trans).inverse().compose(
+                    Rotate(euler_angles_to_matrix(rot, 'XYZ'))
+                )
+
+                # transform back to world frame
+                T_goal2world = Transform3d(
+                    matrix=batch["T_goal2world"].to(device)
+                )
+                pc = T_goal2world.transform_points(pc)
+                pc_anchor = T_goal2world.transform_points(pc_anchor)
+                # pred_action = T_goal2world.transform_points(pred_action)
+
+                # transform to origin
+                pc = T_world2origin.transform_points(pc)
+                pc_anchor = T_world2origin.transform_points(pc_anchor)
+                # pred_action = T_world2origin.transform_points(pred_action)
+
+                # expanding transform to handle pred_action
+                T_goal2world = Transform3d(
+                    matrix=expand_pcd(T_goal2world.get_matrix(), num_samples)
+                )
+                T_world2origin = Transform3d(
+                    matrix=expand_pcd(T_world2origin.get_matrix(), num_samples)
+                )
+                pred_action = T_goal2world.transform_points(pred_action)
+                pred_action = T_world2origin.transform_points(pred_action)
+            
+                #fig = visualize_batched_point_clouds([pc_anchor, pc, pred_action])
+                #fig.show()
+
+                batch_rmses = []
+
+                for p in pred_action:
+                    p = expand_pcd(p.unsqueeze(0), bs)
+                    rmse = flow_rmse(p, pc, mask=True, seg=seg)
+                    rmse_min = torch.min(rmse)
+                    batch_rmses.append(rmse_min)
+                precision_rmses.append(torch.tensor(batch_rmses).mean())
+            return torch.stack(precision_rmses).mean()
+
+        #train_precision_rmse = precision_eval(train_loader, model)
+        val_precision_rmse = precision_eval(val_loader, model)
+        val_ood_precision_rmse = precision_eval(val_ood_loader, model)
+        #print("Train Precision RMSE: ", train_precision_rmse)
+        print("Val Precision RMSE: ", val_precision_rmse)
+        print("Val OOD Precision RMSE: ", val_ood_precision_rmse)
+
+
+        
 
     # if PRECISION_METRICS:
         # model.to(device)
