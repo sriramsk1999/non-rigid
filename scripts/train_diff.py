@@ -81,7 +81,7 @@ def main(cfg):
     elif cfg.dataset.type in ["cloth", "cloth_point"]:
         dm = ProcClothFlowDataModule
         # determine type based on model type
-    elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point"]:
+    elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point", "rpdiff_point"]:
         dm = RigidDataModule  # TODO: Pass dataset cfg to all so we can remove partial
     else:
         raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
@@ -148,7 +148,7 @@ def main(cfg):
     # override the task type here based on the dataset
     if "cloth" in cfg.dataset.type:
         cfg.task_type = "cloth"
-    elif "rigid" in cfg.dataset.type:
+    elif "rigid" in cfg.dataset.type or "rpdiff" in cfg.dataset.type:
         cfg.task_type = "rigid"
     else:
         raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
