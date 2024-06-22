@@ -110,6 +110,7 @@ class ProcClothFlowDataset(data.Dataset):
             item["pc_action"] = points_scene # Scene points in starting position
             item["seg"] = scene_seg
             item["flow"] = gt_flow
+            item["T_goal2world"] = T_goal2world.get_matrix().squeeze(0)
 
             # item["pc"] = scene_pc + scene_flow # Scene points in goal position
             # item["pc_action"] = scene_pc # Scene points in starting position

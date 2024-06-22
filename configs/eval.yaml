@@ -21,6 +21,14 @@ defaults:
 
 seed: 42
 task_type: None # Set during eval loop based on dataset.
+splits:
+  - train_1
+  - val_1
+  - val_ood_1
+
+coverage: False
+precision: False
+viz: False
 
 # This is the checkpoint that we're evaluating. You can change this to whatever you need,
 # like if you want multiple checkpoints simultaneously, etc.

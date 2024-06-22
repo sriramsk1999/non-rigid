@@ -27,7 +27,7 @@ from tqdm import tqdm
 import rpad.visualize_3d.plots as vpl
 from scipy.spatial.transform import Rotation as R
 from pytorch3d.transforms import Transform3d
-
+from PIL import Image
 
 def policy_simple(obs, act, task, step, speed_factor=1.0):
     """A very simple default policy."""
@@ -88,6 +88,7 @@ def play(env, pred_flows, rot, trans, deform_params=None):
             'holes': [{'x0': 5, 'x1': 8, 'y0': 5, 'y1': 7}]
         }
     obs = env.reset(rigid_trans=trans, rigid_rot=rot, deform_params=deform_params)
+    # breakpoint()
     # input('Press Enter to start playing...')
     for epsd in tqdm(range(num_episodes)):
         # print('------------ Play episode ', epsd, '------------------')
@@ -119,6 +120,7 @@ def play(env, pred_flows, rot, trans, deform_params=None):
                 centroid_check, centroid_dists = env.check_centroid()
                 centroid_dist += np.min(centroid_dists)
                 # success = env.check_success(debug=False)
+                # input('Press Enter to start playing...')
                 info = env.end_episode(rwd)
                 polygon_check = env.check_polygon()
                 success = np.any(centroid_check * polygon_check)
@@ -139,6 +141,7 @@ def play(env, pred_flows, rot, trans, deform_params=None):
 
 
 def model_predict(cfg, model, batch):
+    # cfg.inference.num_trials = 10
     pred_dict = model.predict(batch, cfg.inference.num_trials, progress=False)
     pred_flow = pred_dict["pred_world_flow"]
 
@@ -147,7 +150,24 @@ def model_predict(cfg, model, batch):
         seg = batch["seg"].to(f'cuda:{cfg.resources.gpus[0]}')
         pred_flow = pred_flow[:, seg.squeeze(0) == 1, :]
 
+    # pc_anchor = batch["pc_anchor"].cpu().squeeze().numpy()
+    # pc = batch["pc"].squeeze().cpu().numpy()
+    # pred_action = pred_dict["pred_action"][[1]].cpu().squeeze().numpy()
     
+    # pred_action_size = pred_action.shape[1]
+    # pred_action = pred_action.reshape(-1, 3)
+    # pred_action_seg = np.array([np.arange(2, 12)] * pred_action_size).T.flatten()
+    # vpl.segmentation_fig(
+    #     np.concatenate([pc_anchor, 
+    #                     pc, 
+    #                     pred_action], axis=0),
+    #     np.concatenate([np.ones(pc_anchor.shape[0]) * 0, 
+    #                     np.ones(pc.shape[0]) * 5,
+    #                     np.ones(pred_action.shape[0]) * 1,
+    #                     # pred_action_seg,
+    #                     ], axis=0).astype(np.int16),
+    # ).show()
+    # quit()
     return pred_flow
 
 
@@ -155,6 +175,9 @@ def eval_dataset(cfg, env, dataloader, model):
     total_successes = 0
     centroid_dists = []
     for batch in tqdm(dataloader):
+        #if i % 4 != 0:
+        # if i < 17:
+        #     continue
         rot = batch["rot"].squeeze().numpy()
         trans = batch["trans"].squeeze().numpy()
         if "deform_params" in batch:

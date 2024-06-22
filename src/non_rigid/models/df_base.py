@@ -391,7 +391,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
         
         pred_action = pc_action.transpose(-1, -2) + pred_flow
 
-
+        
         if self.model_cfg.type == "flow_cross":
             # inverting transforms to get world frame flow
             T_action2world = Transform3d(
@@ -403,8 +403,20 @@ class FlowPredictionInferenceModule(L.LightningModule):
             # computing pred flow in world frame
             pc_action = pc_action.transpose(-1, -2)
             pred_world_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
+            results_world = [
+                T_goal2world.transform_points(pc_action + r.permute(0, 2, 1))# - T_action2world.transform_points(pc_action)
+                for r in results
+            ]
         else:
-            pred_world_flow = pred_flow
+            T_goal2world = Transform3d(
+                matrix=expand_pcd(batch["T_goal2world"].to(self.device), num_samples)
+            )
+            pc_action = pc_action.transpose(-1, -2)
+            pred_world_flow = pred_flow # TODO: Technically, this should reverse transform as well
+            results_world = [
+                T_goal2world.transform_points(pc_action + r.permute(0, 2, 1))
+                for r in results
+            ]
 
         return {
             "model_kwargs": model_kwargs,
@@ -412,6 +424,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
             "pred_world_flow": pred_world_flow,
             "pred_action": pred_action,
             "results": results,
+            "results_world": results_world,
         }
 
     def predict_wta(self, batch, mode):
@@ -900,6 +913,12 @@ class PointPredictionInferenceModule(L.LightningModule):
             pc_action = pc_action.transpose(-1, -2)
             pred_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
             item["pred_world_flow"] = pred_flow # predicted flow in WORLD frame
+
+            results_world = [
+                T_goal2world.transform_points(r.permute(0, 2, 1))# - T_action2world.transform_points(pc_action)
+                for r in results
+            ]
+            item["results_world"] = results_world
         return item
         
     def predict_wta(
