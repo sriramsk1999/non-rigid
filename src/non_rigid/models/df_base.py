@@ -1,38 +1,32 @@
 from typing import Any, Dict
 
+import lightning as L
 import numpy as np
 import omegaconf
 import plotly.express as px
-
-import lightning as L
-import torch
-from torch import nn
-import torch.nn.functional as F
-from torch import optim
-import torchvision as tv
-
 import rpad.pyg.nets.dgcnn as dgcnn
+import rpad.visualize_3d.plots as vpl
+import torch
+import torch.nn.functional as F
 import torch_geometric.data as tgd
 import torch_geometric.transforms as tgt
+import torchvision as tv
+import wandb
+from diffusers import get_cosine_schedule_with_warmup
+from pytorch3d.transforms import Transform3d
+from torch import nn, optim
 from torch_geometric.nn import fps
 
-from pytorch3d.transforms import Transform3d
-
-import wandb
-
-from non_rigid.models.dit.models import (
-    DiT_PointCloud_Unc as DiT_pcu,
-    DiT_PointCloud_Unc_Cross,
-)
-from non_rigid.models.dit.diffusion import create_diffusion
 from non_rigid.metrics.error_metrics import get_pred_pcd_rigid_errors
 from non_rigid.metrics.flow_metrics import flow_cos_sim, flow_rmse, pc_nn
+from non_rigid.models.dit.diffusion import create_diffusion
+from non_rigid.models.dit.models import DiT_PointCloud_Unc as DiT_pcu
+from non_rigid.models.dit.models import (
+    DiT_PointCloud_Unc_Cross,
+    Rel3D_DiT_PointCloud_Unc_Cross,
+)
 from non_rigid.utils.logging_utils import viz_predicted_vs_gt
 from non_rigid.utils.pointcloud_utils import expand_pcd
-
-from diffusers import get_cosine_schedule_with_warmup
-
-import rpad.visualize_3d.plots as vpl
 
 
 def DiT_pcu_S(**kwargs):
@@ -47,20 +41,32 @@ def DiT_pcu_cross_xS(**kwargs):
     return DiT_PointCloud_Unc_Cross(depth=5, hidden_size=128, num_heads=4, **kwargs)
 
 
+def Rel3D_DiT_pcu_cross_xS(**kwargs):
+    # Embed dim divisible by 3 for 3D positional encoding and divisible by num_heads for multi-head attention
+    return Rel3D_DiT_PointCloud_Unc_Cross(
+        depth=5, hidden_size=132, num_heads=4, **kwargs
+    )
+
+
 DiT_models = {
     "DiT_pcu_S": DiT_pcu_S,
     "DiT_pcu_xS": DiT_pcu_xS,
     "DiT_pcu_cross_xS": DiT_pcu_cross_xS,
+    "Rel3D_DiT_pcu_cross_xS": Rel3D_DiT_pcu_cross_xS,
 }
 
 
 class DiffusionFlowBase(nn.Module):
     # literally just unconditional DiT adapted for PC
-    def __init__(self, in_channels=6, learn_sigma=False, model="DiT_pcu_S", model_cfg=None):
+    def __init__(
+        self, in_channels=6, learn_sigma=False, model="DiT_pcu_S", model_cfg=None
+    ):
         super().__init__()
         # TODO: get in channels from params, and pass as kwargs
         # TODO: input needs to already be hidden size dim
-        self.dit = DiT_models[model](in_channels=in_channels, learn_sigma=learn_sigma, model_cfg=model_cfg)
+        self.dit = DiT_models[model](
+            in_channels=in_channels, learn_sigma=learn_sigma, model_cfg=model_cfg
+        )
 
     def forward(self, x, t, **kwargs):
         # extract
@@ -73,7 +79,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
         self.network = network
         self.training_cfg = training_cfg
         self.model_cfg = model_cfg
-        
+
         self.lr = training_cfg.lr
         self.weight_decay = training_cfg.weight_decay  # 1e-5
         # self.mode, self.traj_len so far not needed
@@ -93,7 +99,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
             diffusion_steps=self.diff_train_steps,
         )
 
-    def forward(self, batch, t, mode="train"):       
+    def forward(self, batch, t, mode="train"):
         pc_action = batch["pc_action"].permute(0, 2, 1)  # channel first
         flow = batch["flow"].permute(0, 2, 1)  # channel first
         model_kwargs = dict(x0=pc_action)
@@ -103,9 +109,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
             model_kwargs["y"] = pc_anchor
 
         # run diffusion
-        loss_dict = self.diffusion.training_losses(
-            self.network, flow, t, model_kwargs
-        )
+        loss_dict = self.diffusion.training_losses(self.network, flow, t, model_kwargs)
         loss = loss_dict["loss"].mean()
         self.log_dict(
             {
@@ -137,18 +141,20 @@ class FlowPredictionTrainingModule(L.LightningModule):
         pred_flow = pred_flow.permute(0, 2, 1)
         if unflatten:
             pred_flow = pred_flow.reshape(bs, num_samples, self.sample_size, -1)
-        
+
         for key in model_kwargs:
             if key in ["pos", "y", "x0"]:
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
-                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, self.sample_size, -1)
+                    model_kwargs[key] = model_kwargs[key].reshape(
+                        bs, num_samples, self.sample_size, -1
+                    )
         return model_kwargs, pred_flow, results
 
     def predict_wta(self, batch, mode):
         pc_action = batch["pc_action"].to(self.device)
         gt_flow = batch["flow"].to(self.device)
-        seg = batch["seg"].to(self.device) # TODO: Rigid dataset doesn't have this
+        seg = batch["seg"].to(self.device)  # TODO: Rigid dataset doesn't have this
         mask = True
         # reshaping and expanding for winner-take-all
         bs = pc_action.shape[0]
@@ -164,7 +170,9 @@ class FlowPredictionTrainingModule(L.LightningModule):
             model_kwargs["y"] = pc_anchor
 
         # generating diffusion predictions
-        model_kwargs, pred_flow, results = self.predict(bs, model_kwargs, self.num_wta_trials, unflatten=False)
+        model_kwargs, pred_flow, results = self.predict(
+            bs, model_kwargs, self.num_wta_trials, unflatten=False
+        )
         # computing wta errors
         cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
             bs, self.num_wta_trials
@@ -311,12 +319,10 @@ class FlowPredictionTrainingModule(L.LightningModule):
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         # no test for now
         pass
-    
+
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(
-            batch, mode="val"
-        )
+        pred_actions_wta, cos_sim_wta, rmse_wta = self.predict_wta(batch, mode="val")
         return {
             "cos_sim": cos_sim_wta,
             "rmse": rmse_wta,
@@ -382,16 +388,17 @@ class FlowPredictionInferenceModule(L.LightningModule):
         pred_flow = pred_flow.permute(0, 2, 1)
         if unflatten:
             pred_flow = pred_flow.reshape(bs, num_samples, sample_size, -1)
-        
+
         for key in model_kwargs:
             if key in ["pos", "y", "x0"]:
                 model_kwargs[key] = model_kwargs[key].permute(0, 2, 1)
                 if unflatten:
-                    model_kwargs[key] = model_kwargs[key].reshape(bs, num_samples, sample_size, -1)
-        
+                    model_kwargs[key] = model_kwargs[key].reshape(
+                        bs, num_samples, sample_size, -1
+                    )
+
         pred_action = pc_action.transpose(-1, -2) + pred_flow
 
-        
         if self.model_cfg.type == "flow_cross":
             # inverting transforms to get world frame flow
             T_action2world = Transform3d(
@@ -435,7 +442,9 @@ class FlowPredictionInferenceModule(L.LightningModule):
         bs = gt_flow.shape[0]
         gt_flow = expand_pcd(gt_flow, self.num_wta_trials)
         seg = expand_pcd(seg, self.num_wta_trials)
-        pred_dict = self.predict(batch, self.num_wta_trials, unflatten=False, progress=True)
+        pred_dict = self.predict(
+            batch, self.num_wta_trials, unflatten=False, progress=True
+        )
         pred_flow = pred_dict["pred_flow"]
         # computing wta errors
         cos_sim = flow_cos_sim(pred_flow, gt_flow, mask=mask, seg=seg).reshape(
@@ -651,19 +660,10 @@ class PointPredictionTrainingModule(L.LightningModule):
 
             if self.task_type == "rigid":
                 # Get prediction error
-                start_xyz = batch["pc_action"]
                 pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
-                T_action2goal = batch["T_action2goal"]
-                T_action2distractor_list = (
-                    batch["T_action2distractor_list"]
-                    if "T_action2distractor_list" in batch
-                    else None
-                )
                 errors = get_pred_pcd_rigid_errors(
-                    start_xyz=start_xyz,
+                    batch=batch,
                     pred_xyz=pred_xyz,
-                    T_gt=T_action2goal,
-                    T_action2distractor_list=T_action2distractor_list,
                     error_type=self.training_cfg.prediction_error_type,
                 )
                 self.log_dict(
@@ -728,19 +728,10 @@ class PointPredictionTrainingModule(L.LightningModule):
 
         if self.task_type == "rigid":
             # Get prediction error
-            start_xyz = batch["pc_action"]
             pred_xyz = pred_actions[:, 0, ...]  # Take first sample of every batch
-            T_action2goal = batch["T_action2goal"]
-            T_action2distractor_list = (
-                batch["T_action2distractor_list"]
-                if "T_action2distractor_list" in batch
-                else None
-            )
             errors = get_pred_pcd_rigid_errors(
-                start_xyz=start_xyz,
+                batch=batch,
                 pred_xyz=pred_xyz,
-                T_gt=T_action2goal,
-                T_action2distractor_list=T_action2distractor_list,
                 error_type=self.training_cfg.prediction_error_type,
             )
             self.log_dict(
@@ -771,7 +762,9 @@ class PointPredictionTrainingModule(L.LightningModule):
             pc_anchor_viz=pc_anchor_viz,
             pred_action_viz=pred_action_wta_viz,
         )
-        wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt_wta_viz})
+        wandb.log(
+            {f"val_wta/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt_wta_viz}
+        )
 
         pred_action_viz = pred_actions[viz_idx, 0, :, :3]
         predicted_vs_gt_viz = viz_predicted_vs_gt(
@@ -825,7 +818,6 @@ class PointPredictionInferenceModule(L.LightningModule):
         self.num_wta_trials = inference_cfg.num_wta_trials
         self.num_trials = inference_cfg.num_trials
 
-
         self.noise_schedule = model_cfg.diff_noise_schedule
         self.noise_scale = model_cfg.diff_noise_scale
 
@@ -840,7 +832,7 @@ class PointPredictionInferenceModule(L.LightningModule):
         raise NotImplementedError(
             "Inference module should not use forward method - use 'predict' instead."
         )
-    
+
     @torch.no_grad()
     def predict(
         self,
@@ -851,7 +843,7 @@ class PointPredictionInferenceModule(L.LightningModule):
         return_flow: bool = True,
     ):
         """
-        unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return 
+        unflatten: if True, unflatten all outputs to shape (batch_size, num_samples, ...); otherwise, return
         with shape (batch_size * num_samples, ...)
         return_flow: if True, return predicted flow in world frame as well
         """
@@ -897,7 +889,7 @@ class PointPredictionInferenceModule(L.LightningModule):
         item = {
             "model_kwargs": model_kwargs,
             "results": results,
-            "pred_action": pred_action, # predicted action in goal frame
+            "pred_action": pred_action,  # predicted action in goal frame
         }
 
         if return_flow:
@@ -920,16 +912,18 @@ class PointPredictionInferenceModule(L.LightningModule):
             ]
             item["results_world"] = results_world
         return item
-        
+
     def predict_wta(
-            self,
-            batch: Dict[str, torch.Tensor],
-            mode: str,
+        self,
+        batch: Dict[str, torch.Tensor],
+        mode: str,
     ):
         pos = batch["pc"].to(self.device)
         bs = pos.shape[0]
         gt_action = expand_pcd(pos, self.num_wta_trials)
-        pred_dict = self.predict(batch, self.num_wta_trials, unflatten=False, progress=True)
+        pred_dict = self.predict(
+            batch, self.num_wta_trials, unflatten=False, progress=True
+        )
         pred_action = pred_dict["pred_action"]
 
         # computing wta errors
@@ -953,7 +947,7 @@ class PointPredictionInferenceModule(L.LightningModule):
             "rmse_wta": rmse_wta,
             "rmse": rmse,
         }
-    
+
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
         predict_wta_dict = self.predict_wta(batch, mode="predict")

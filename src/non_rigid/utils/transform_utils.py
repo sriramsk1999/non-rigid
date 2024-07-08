@@ -6,6 +6,7 @@ from pytorch3d.transforms import (
     quaternion_to_matrix,
     so3_rotation_angle,
 )
+from scipy.spatial.transform import Rotation as R
 import torch
 import torch.nn.functional as F
 from typing import Tuple, List
@@ -276,3 +277,22 @@ def get_transform_list_min_translation_errors(
     min = torch.min(t_min).item()
     mean = torch.mean(t_min).item()
     return max, min, mean
+
+
+def matrix_from_list(pose_list: List[float]) -> np.ndarray:
+    """
+    Convert a list of pose parameters to a 4x4 matrix.
+    
+    Args:
+        pose_list: List of pose parameters [tx, ty, tz, qx, qy, qz, qw]
+        
+    Returns:
+        np.ndarray: 4x4 matrix
+    """
+    trans = pose_list[:3]
+    quat = pose_list[3:]
+
+    T = np.eye(4)
+    T[:-1, :-1] = R.from_quat(quat).as_matrix()
+    T[:-1, -1] = trans
+    return T
