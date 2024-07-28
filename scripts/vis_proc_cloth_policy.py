@@ -29,6 +29,7 @@ import rpad.visualize_3d.plots as vpl
 from scipy.spatial.transform import Rotation as R
 from pytorch3d.transforms import Transform3d
 from PIL import Image
+import cv2
 
 CAM_PROJECTION = (1.0, 0.0, 0.0, 0.0,
                     0.0, 1.0, 0.0, 0.0,
@@ -41,8 +42,9 @@ CAM_VIEW = (0.9396926164627075, 0.14454397559165955, -0.3099755346775055, 0.0,
 
 CAM_WIDTH = 500
 CAM_HEIGHT = 500
+POLICY_SPEED = 4
 
-LOG_DIR = '/home/eycai/Documents/non_rigid_logs/'
+LOG_DIR = '/home/eycai/Documents/non_rigid_vis/'
 LOG = True
 
 def camera_project(point,
@@ -171,7 +173,7 @@ def play(env, log_dir, pred_flows, results, rot, trans, deform_params=None):
                 diffusion_frames.append(plot_diffusion(vid_frames[0], r, color_key))
 
             diffusion_frames[0].save(log_dir + 'diffusion.gif', save_all=True,
-                                    append_images=diffusion_frames[1:], duration=33, loop=0)
+                                    append_images=diffusion_frames[2::2], duration=33, loop=0)
 
         step = 0
         while True:
@@ -184,7 +186,9 @@ def play(env, log_dir, pred_flows, results, rot, trans, deform_params=None):
                 centroid_dist += np.min(centroid_dists)
                 # success = env.check_success(debug=False)
                 # input('Press Enter to start playing...')
-                info = env.end_episode(rwd)
+                # info = env.end_episode(rwd)
+                end_frames = env.end_episode_viz(width=CAM_WIDTH, height=CAM_HEIGHT)
+                vid_frames.extend(end_frames)
                 polygon_check = env.check_polygon()
                 success = np.any(centroid_check * polygon_check)
                 # print(success, centroid_check, polygon_check, centroid_dist)
@@ -199,8 +203,16 @@ def play(env, log_dir, pred_flows, results, rot, trans, deform_params=None):
         
         if LOG:
             # save video
+            #  default 1/240.0 for step_sim, 8 sim steps per env step
             vid_frames[0].save(log_dir + 'video.gif', save_all=True, 
-                            append_images=vid_frames[1:], duration=33, loop=0)
+                            append_images=vid_frames[POLICY_SPEED::POLICY_SPEED], duration=33, loop=0)
+            # also save as mp4
+            video_writer = cv2.VideoWriter(log_dir + 'video.mp4', 
+                                           cv2.VideoWriter_fourcc(*'mp4v'), 30, (CAM_WIDTH, CAM_HEIGHT))
+            for frame in vid_frames[::POLICY_SPEED]:
+                video_writer.write(cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR))
+            video_writer.release()
+
             # save just last frame
             vid_frames[-1].save(log_dir + 'last_frame.png')
     quit()
@@ -244,14 +256,14 @@ def model_predict(cfg, model, batch):
             np.ones(pred_action.shape[0]) * 1,
         ], axis=0).astype(np.int16),
     )
-    fig.show()
+    # fig.show()
 
 
     return pred_flow, results
 
 
-def eval_dataset(cfg, env, dataloader, model, log_dir):
-    index = 21
+def eval_dataset(cfg, env, dataloader, model, log_dir):    
+    index = 34
     log_dir = log_dir + f'{index}/'
 
     os.makedirs(log_dir, exist_ok=True)

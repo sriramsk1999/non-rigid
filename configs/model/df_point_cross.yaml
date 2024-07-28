@@ -2,6 +2,7 @@ name: df_point_cross
 
 # Model settings
 type: point_cross
+# dit_arch: Rel3D_DiT_pcu_cross_xS
 dit_arch: DiT_pcu_cross_xS
 in_channels: 3
 learn_sigma: True

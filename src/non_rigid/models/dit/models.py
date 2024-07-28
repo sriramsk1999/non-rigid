@@ -189,6 +189,7 @@ class DiTBlock(nn.Module):
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
+# TODO: impelment DiTRelativeBlock
 
 class DiTCrossBlock(nn.Module):
     """
@@ -685,7 +686,7 @@ class DiT_PointCloud_Unc_Cross(nn.Module):
             y (torch.Tensor): (B, D, N) tensor of un-noised scene (e.g. anchor) features
             x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
         """
-        if self.model_cfg.x_relative:
+        if self.model_cfg.center_noise:
             relative_center = torch.mean(x, dim=2, keepdim=True)
             x = x - relative_center
             y = y - relative_center
@@ -854,7 +855,7 @@ class Rel3D_DiT_PointCloud_Unc_Cross(nn.Module):
             x0 (Optional[torch.Tensor]): (B, D, N) tensor of un-noised x (e.g. action) features
         """
 
-        if self.model_cfg.x_relative:
+        if self.model_cfg.center_noise:
             relative_center = torch.mean(x, dim=2, keepdim=True)
             x = x - relative_center
             y = y - relative_center

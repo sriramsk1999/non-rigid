@@ -296,8 +296,10 @@ class ProcClothPointDataset(data.Dataset):
         return item
 
 DATASET_FN = {
-    "cloth": ProcClothFlowDataset,
-    "cloth_point": ProcClothPointDataset,
+    # "cloth": ProcClothFlowDataset,
+    # "cloth_point": ProcClothPointDataset,
+    "flow": ProcClothFlowDataset,
+    "point": ProcClothPointDataset,
 }
 
 
@@ -405,9 +407,9 @@ def cloth_collate_fn(batch):
 
 
 if __name__ == "__main__":
-    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_2/val_ood2")
+    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_1/val_ood_1")
     import rpad.visualize_3d.plots as vpl
-    for i in range(16):
+    for i in range(40):
         demo = np.load(dir / f"demo_{i}.npz", allow_pickle=True)
         action = demo["action_pc"]
         anchor = demo["anchor_pc"]
@@ -415,6 +417,13 @@ if __name__ == "__main__":
         anchor_seg = demo["anchor_seg"]
         flow = demo["flow"]
         goal = action + flow
+
+
+        rot = demo["rot"]
+        trans = demo["trans"]
+        print(rot, trans)
+        # print(demo["deform_params"])
+        continue
 
         # action = torch.tensor(action).float()
         # action, indices = downsample_pcd(action.unsqueeze(0), 512, type="fps")

@@ -133,7 +133,7 @@ def play(env, pred_flows, rot, trans, deform_params=None):
                 break
             obs = next_obs
             step += 1
-        
+
 
         # input('Episode ended; press Enter to continue...')
         # env.close()
@@ -185,6 +185,20 @@ def eval_dataset(cfg, env, dataloader, model):
         else:
             deform_params = None
 
+
+        # import rpad.visualize_3d.plots as vpl
+        # from pytorch3d.transforms import Transform3d
+
+        # action = batch["pc_action"]
+        # anchor = batch["pc_anchor"]
+        # T_goal2world = Transform3d(matrix=batch["T_goal2world"])
+        # T_action2world = Transform3d(matrix=batch["T_action2world"])
+
+        # action = T_action2world.transform_points(action).squeeze().cpu().numpy()
+        # anchor = T_goal2world.transform_points(anchor).squeeze().cpu().numpy()
+
+        # breakpoint()
+
         pred_flow = model_predict(cfg, model, batch)
         successes, centroid_dist = play(env, pred_flow, rot, trans, deform_params)
         total_successes += successes
@@ -198,6 +212,13 @@ def main(cfg):
     args = get_args()
     args.env = cfg.sim.env
     args.viz = cfg.sim.viz
+
+    # args.tax3d = True
+    # args.pcd = True
+    # args.logdir = 'rendered'
+    # args.cam_config_path = '/home/eycai/Documents/dedo/dedo/utils/cam_configs/camview_0.json'
+
+
     args_postprocess(args)
     assert ('Robot' not in args.env), 'This is a simple demo for anchors only'
     np.set_printoptions(precision=4, linewidth=150, suppress=True)
@@ -233,7 +254,8 @@ def main(cfg):
             raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
 
 
-    if cfg.dataset.type not in ["cloth", "cloth_point"]:
+    # if cfg.dataset.type not in ["cloth", "cloth_point"]:
+    if cfg.dataset.name not in ["proc_cloth"]:
         raise NotImplementedError('This script is only for cloth evaluations.')
     
     # TODO: if inference is full action, set sample size to -1
@@ -257,7 +279,7 @@ def main(cfg):
     network = DiffusionFlowBase(
         in_channels=cfg.model.in_channels,
         learn_sigma=cfg.model.learn_sigma,
-        model=cfg.model.dit_arch,
+        # model=cfg.model.dit_arch,
         model_cfg=cfg.model,
     )
     # get checkpoint file (for now, this does not log a run)
@@ -287,18 +309,20 @@ def main(cfg):
         cfg.inference.sample_size = cfg.dataset.sample_size_action
         cfg.inference.sample_size_anchor = cfg.dataset.sample_size_anchor
     
-    # override the task type here based on the dataset
-    if "cloth" in cfg.dataset.type:
-        cfg.task_type = "cloth"
-    elif "rigid" in cfg.dataset.type:
-        cfg.task_type = "rigid"
-    else:
-        raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
+    # # override the task type here based on the dataset
+    # if "cloth" in cfg.dataset.type:
+    #     cfg.task_type = "cloth"
+    # elif "rigid" in cfg.dataset.type:
+    #     cfg.task_type = "rigid"
+    # else:
+    #     raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
 
 
-    if cfg.model.type in ["flow", "flow_cross"]:
-        model = FlowPredictionInferenceModule(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
-    elif cfg.model.type in ["point_cross"]:
+    if cfg.model.type == "flow":
+        model = FlowPredictionInferenceModule(
+            network, inference_cfg=cfg.inference, model_cfg=cfg.model
+        )
+    elif cfg.model.type == "point":
         model = PointPredictionInferenceModule(
             network, task_type=cfg.task_type, inference_cfg=cfg.inference, model_cfg=cfg.model
         )

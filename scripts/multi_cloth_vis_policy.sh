@@ -70,8 +70,8 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
   echo "Evaluating relative point model at checkpoint $CHECKPOINT with command: $COMMAND."
 
   python vis_proc_cloth_policy.py \
-    model=df_point_cross \
-    dataset=pc_multi_cloth_point \
+    model=df_cross model.type=point \
+    dataset=proc_cloth dataset.type=point \
     dataset.scene=False \
     dataset.world_frame=False \
     inference.action_full=True \

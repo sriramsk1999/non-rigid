@@ -48,6 +48,7 @@ def Rel3D_DiT_pcu_cross_xS(**kwargs):
     )
 
 
+# TODO: maybe do the sys thing to directly call model class instead of this dict
 DiT_models = {
     "DiT_pcu_S": DiT_pcu_S,
     "DiT_pcu_xS": DiT_pcu_xS,
@@ -56,17 +57,30 @@ DiT_models = {
 }
 
 
+def get_model(model_cfg):
+    rotary = "Rel3D_" if model_cfg.rotary else ""
+    cross = "cross_" if model_cfg.name == "df_cross" else ""
+    model_name = f"{rotary}DiT_pcu_{cross}{model_cfg.size}"
+    return DiT_models[model_name]
+
+
+# TODO: rename this from DiffusionFlowBase to something more general
 class DiffusionFlowBase(nn.Module):
     # literally just unconditional DiT adapted for PC
     def __init__(
         self, in_channels=6, learn_sigma=False, model="DiT_pcu_S", model_cfg=None
     ):
         super().__init__()
-        # TODO: get in channels from params, and pass as kwargs
-        # TODO: input needs to already be hidden size dim
-        self.dit = DiT_models[model](
-            in_channels=in_channels, learn_sigma=learn_sigma, model_cfg=model_cfg
+        # TODO: eventually change from self.dit to self.model (this will mess up state dict)
+        self.dit = get_model(model_cfg)(
+            in_channels=model_cfg.in_channels, 
+            learn_sigma=model_cfg.learn_sigma, 
+            model_cfg=model_cfg
         )
+
+        # self.dit = DiT_models[model](
+        #     in_channels=in_channels, learn_sigma=learn_sigma, model_cfg=model_cfg
+        # )
 
     def forward(self, x, t, **kwargs):
         # extract
@@ -79,6 +93,8 @@ class FlowPredictionTrainingModule(L.LightningModule):
         self.network = network
         self.training_cfg = training_cfg
         self.model_cfg = model_cfg
+
+        # TODO: combine this with point modules, and just have a class attribute for cross models
 
         self.lr = training_cfg.lr
         self.weight_decay = training_cfg.weight_decay  # 1e-5
@@ -104,7 +120,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
         flow = batch["flow"].permute(0, 2, 1)  # channel first
         model_kwargs = dict(x0=pc_action)
         # if cross attention, pass in additional data
-        if self.model_cfg.type == "flow_cross":
+        if self.model_cfg.name == "df_cross":
             pc_anchor = batch["pc_anchor"].permute(0, 2, 1)
             model_kwargs["y"] = pc_anchor
 
@@ -164,7 +180,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
         model_kwargs = dict(x0=pc_action)
         # if cross attention, pass in additional data
-        if self.model_cfg.type == "flow_cross":
+        if self.model_cfg.name == "df_cross":
             pc_anchor = batch["pc_anchor"].to(self.device)
             pc_anchor = expand_pcd(pc_anchor, self.num_wta_trials).transpose(-1, -2)
             model_kwargs["y"] = pc_anchor
@@ -253,7 +269,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
                 "pred_action_viz": pred_action_wta_viz,
             }
             # if cross attention, pass in additional data
-            if self.model_cfg.type == "flow_cross":
+            if self.model_cfg.name == "df_cross":
                 pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
                 viz_args["pc_anchor_viz"] = pc_anchor_viz
             predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
@@ -300,7 +316,7 @@ class FlowPredictionTrainingModule(L.LightningModule):
             "pred_action_viz": pred_action_wta_viz,
         }
         # if cross attention, pass in additional data
-        if self.model_cfg.type == "flow_cross":
+        if self.model_cfg.name == "df_cross":
             pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
             viz_args["pc_anchor_viz"] = pc_anchor_viz
         predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
@@ -369,7 +385,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
         pc_action = expand_pcd(pc_action, num_samples).transpose(-1, -2)
         model_kwargs = dict(x0=pc_action)
         # if cross attention, pass in additional data
-        if self.model_cfg.type == "flow_cross":
+        if self.model_cfg.name == "df_cross":
             pc_anchor = batch["pc_anchor"].to(self.device)
             pc_anchor = expand_pcd(pc_anchor, num_samples).transpose(-1, -2)
             model_kwargs["y"] = pc_anchor
@@ -399,7 +415,7 @@ class FlowPredictionInferenceModule(L.LightningModule):
 
         pred_action = pc_action.transpose(-1, -2) + pred_flow
 
-        if self.model_cfg.type == "flow_cross":
+        if self.model_cfg.name == "df_cross":
             # inverting transforms to get world frame flow
             T_action2world = Transform3d(
                 matrix=expand_pcd(batch["T_action2world"].to(self.device), num_samples)

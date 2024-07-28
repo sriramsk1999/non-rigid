@@ -10,6 +10,8 @@ x_encoder: mlp # Encoder current timestep x
 y_encoder: mlp # (mlp, dgcnn) Encoder for y object (e.g. anchor pcd)
 x0_encoder: mlp # (mlp, dgcnn) Encoder for x0 object (e.g. action pcd)
 
+x_relative: False # Convert pcds to coordinate frame centered at x mean
+
 # Diffusion settings
 diff_train_steps: 100
 diff_inference_steps: 100

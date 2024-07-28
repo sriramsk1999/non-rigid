@@ -75,16 +75,33 @@ def main(cfg):
             raise ValueError(
                 f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}"
             )
+        
+    # check that dataset and model types are compatible
+    if cfg.model.type != cfg.dataset.type:
+        raise ValueError(
+            f"Model type: '{cfg.model.type}' and dataset type: '{cfg.dataset.type}' are incompatible."
+        )
+    elif cfg.model.type not in ["flow", "point"]:
+        raise ValueError(f"Unknown model type: {cfg.model.type}")
+    
 
-    if cfg.dataset.type in ["articulated", "articulated_multi"]:
-        dm = MicrowaveFlowDataModule
-    elif cfg.dataset.type in ["cloth", "cloth_point"]:
+
+    # if cfg.dataset.type in ["articulated", "articulated_multi"]:
+    #     dm = MicrowaveFlowDataModule
+    # elif cfg.dataset.type in ["cloth", "cloth_point"]:
+    #     dm = ProcClothFlowDataModule
+    #     # determine type based on model type
+    # elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point", "rpdiff_point"]:
+    #     dm = RigidDataModule  # TODO: Pass dataset cfg to all so we can remove partial
+    # else:
+    #     raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
+    
+
+    if cfg.dataset.name in ["proc_cloth"]:
         dm = ProcClothFlowDataModule
-        # determine type based on model type
-    elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point", "rpdiff_point"]:
-        dm = RigidDataModule  # TODO: Pass dataset cfg to all so we can remove partial
     else:
-        raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
+        raise ValueError(f"Unknown dataset name: {cfg.dataset.name}.")
+
 
     datamodule = dm(
         root=data_root,
@@ -115,7 +132,7 @@ def main(cfg):
     network = DiffusionFlowBase(
         in_channels=cfg.model.in_channels,
         learn_sigma=cfg.model.learn_sigma,
-        model=cfg.model.dit_arch,
+        # model=cfg.model.dit_arch, # TODO: configs won't ahve this anymore?
         model_cfg=cfg.model,
     )
 
@@ -145,25 +162,27 @@ def main(cfg):
         cfg.training.sample_size = cfg.dataset.sample_size_action
         cfg.training.sample_size_anchor = cfg.dataset.sample_size_anchor
 
-    # override the task type here based on the dataset
-    if "cloth" in cfg.dataset.type:
-        cfg.task_type = "cloth"
-    elif "rigid" in cfg.dataset.type or "rpdiff" in cfg.dataset.type:
-        cfg.task_type = "rigid"
-    else:
-        raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
+    # # override the task type here based on the dataset
+    # if "cloth" in cfg.dataset.type:
+    #     cfg.task_type = "cloth"
+    # elif "rigid" in cfg.dataset.type or "rpdiff" in cfg.dataset.type:
+    #     cfg.task_type = "rigid"
+    # else:
+    #     raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
 
-    if cfg.model.type in ["flow", "flow_cross"]:
+    if cfg.model.type == "flow":
         model = FlowPredictionTrainingModule(
             network, training_cfg=cfg.training, model_cfg=cfg.model
         )
-    elif cfg.model.type in ["point_cross"]:
+    elif cfg.model.type == "point":
         model = PointPredictionTrainingModule(
             network,
             task_type=cfg.task_type,
             training_cfg=cfg.training,
             model_cfg=cfg.model,
         )
+    else:
+        raise ValueError(f"Unsupported model type: {cfg.model.type}")
 
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)
@@ -235,8 +254,8 @@ def main(cfg):
             ),
             ModelCheckpoint(
                 dirpath=cfg.lightning.checkpoint_dir,
-                filename="{epoch}-{step}-{val_wta/rmse:.3f}",
-                monitor="val_wta/rmse",
+                filename="{epoch}-{step}-{val_wta_rmse:.3f}",
+                monitor="val_wta_rmse_0",
                 mode="min",
                 save_weights_only=False,
                 save_last=False,
