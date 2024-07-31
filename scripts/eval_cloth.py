@@ -140,8 +140,8 @@ def main(cfg):
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
     network = DiffusionFlowBase(
-        in_channels=cfg.model.in_channels,
-        learn_sigma=cfg.model.learn_sigma,
+        # in_channels=cfg.model.in_channels,
+        # learn_sigma=cfg.model.learn_sigma,
         # model=cfg.model.dit_arch,
         model_cfg=cfg.model,
     )
@@ -167,7 +167,8 @@ def main(cfg):
     
     # setting sample sizes
     if "scene" in cfg.dataset and cfg.dataset.scene:
-        if cfg.model.type != "flow":
+        # if cfg.model.type != "flow":
+        if cfg.model.name != "df_base":
             raise NotImplementedError("Scene inputs cannot be used with cross-type models.")
         cfg.inference.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
     else:

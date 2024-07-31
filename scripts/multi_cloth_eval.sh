@@ -22,7 +22,7 @@ COMMAND=$@
 if [ $MODEL_TYPE == "scene_flow" ]; then
   echo "Evaluating scene flow model at checkpoint $CHECKPOINT with command: $COMMAND."
 
-  MODEL_PARAMS="model=df_base"
+  MODEL_PARAMS="model=df_base model.type=flow"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=flow dataset.scene=True dataset.world_frame=True"
 # world frame cross flow
 elif [ $MODEL_TYPE == "cross_flow_absolute" ]; then

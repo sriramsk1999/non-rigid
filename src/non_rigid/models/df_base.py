@@ -24,6 +24,8 @@ from non_rigid.models.dit.models import DiT_PointCloud_Unc as DiT_pcu
 from non_rigid.models.dit.models import (
     DiT_PointCloud_Unc_Cross,
     Rel3D_DiT_PointCloud_Unc_Cross,
+    DiT_PointCloud_Cross,
+    DiT_PointCloud
 )
 from non_rigid.utils.logging_utils import viz_predicted_vs_gt
 from non_rigid.utils.pointcloud_utils import expand_pcd
@@ -47,20 +49,34 @@ def Rel3D_DiT_pcu_cross_xS(**kwargs):
         depth=5, hidden_size=132, num_heads=4, **kwargs
     )
 
+def DiT_PointCloud_Cross_xS(use_rotary, **kwargs):
+    # hidden size divisible by 3 for rotary embedding, and divisible by num_heads for multi-head attention
+    hidden_size = 132 if use_rotary else 128
+    return DiT_PointCloud_Cross(depth=5, hidden_size=hidden_size, num_heads=4, **kwargs)
 
-# TODO: maybe do the sys thing to directly call model class instead of this dict
+def DiT_PointCloud_xS(use_rotary, **kwargs):
+    # hidden size divisible by 3 for rotary embedding, and divisible by num_heads for multi-head attention
+    hidden_size = 132 if use_rotary else 128
+    return DiT_PointCloud(depth=5, hidden_size=hidden_size, num_heads=4, **kwargs)
+
+
 DiT_models = {
     "DiT_pcu_S": DiT_pcu_S,
     "DiT_pcu_xS": DiT_pcu_xS,
     "DiT_pcu_cross_xS": DiT_pcu_cross_xS,
     "Rel3D_DiT_pcu_cross_xS": Rel3D_DiT_pcu_cross_xS,
+    # there is no Rel3D_DiT_pcu_xS
+    "DiT_PointCloud_Cross_xS": DiT_PointCloud_Cross_xS,
+    # TODO: add the SD model here
+    "DiT_PointCloud_xS": DiT_PointCloud_xS,
 }
 
 
 def get_model(model_cfg):
-    rotary = "Rel3D_" if model_cfg.rotary else ""
-    cross = "cross_" if model_cfg.name == "df_cross" else ""
-    model_name = f"{rotary}DiT_pcu_{cross}{model_cfg.size}"
+    #rotary = "Rel3D_" if model_cfg.rotary else ""
+    cross = "Cross_" if model_cfg.name == "df_cross" else ""
+    # model_name = f"{rotary}DiT_pcu_{cross}{model_cfg.size}"
+    model_name = f"DiT_PointCloud_{cross}{model_cfg.size}"
     return DiT_models[model_name]
 
 
@@ -68,13 +84,15 @@ def get_model(model_cfg):
 class DiffusionFlowBase(nn.Module):
     # literally just unconditional DiT adapted for PC
     def __init__(
-        self, in_channels=6, learn_sigma=False, model="DiT_pcu_S", model_cfg=None
+        # self, in_channels=6, learn_sigma=False, model="DiT_pcu_S", model_cfg=None
+        self, model_cfg=None,
     ):
         super().__init__()
-        # TODO: eventually change from self.dit to self.model (this will mess up state dict)
+        # TODO:the handling of rotary is a bit weird here
         self.dit = get_model(model_cfg)(
+            use_rotary=model_cfg.rotary,
             in_channels=model_cfg.in_channels, 
-            learn_sigma=model_cfg.learn_sigma, 
+            learn_sigma=model_cfg.learn_sigma,
             model_cfg=model_cfg
         )
 
@@ -921,6 +939,7 @@ class PointPredictionInferenceModule(L.LightningModule):
             pc_action = pc_action.transpose(-1, -2)
             pred_flow = T_goal2world.transform_points(pred_action) - T_action2world.transform_points(pc_action)
             item["pred_world_flow"] = pred_flow # predicted flow in WORLD frame
+            item["pred_world_action"] = T_goal2world.transform_points(pred_action)
 
             results_world = [
                 T_goal2world.transform_points(r.permute(0, 2, 1))# - T_action2world.transform_points(pc_action)

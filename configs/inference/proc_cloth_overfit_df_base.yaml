@@ -1,4 +1,0 @@
-batch_size: 16
-val_batch_size: 4
-num_wta_trials: 50
-sample_size: None # Set by the eval loop, from dataset config.
