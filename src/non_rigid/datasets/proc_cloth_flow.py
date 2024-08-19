@@ -18,39 +18,64 @@ from pytorch3d.transforms import Transform3d, Translate
 
 from non_rigid.utils.transform_utils import random_se3
 from non_rigid.utils.pointcloud_utils import downsample_pcd
+from non_rigid.utils.augmentation_utils import ball_occlusion, plane_occlusion, maybe_apply_augmentations
 
 
 class ProcClothFlowDataset(data.Dataset):
-    def __init__(self, root, dataset_cfg, type="train"):
+    def __init__(self, root, dataset_cfg, type):
         # This is a toy dataset - no need to normalize or otherwise process point cloud with torch geometric
         super().__init__()
         self.root = root
         self.type = type
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
-        # self.dataset_type = "flow"
-        print(self.dataset_dir)
-
         self.dataset_cfg = dataset_cfg
+
+        # # setting dataset size
+        # if "train" in self.type:
+        #     self.size = self.dataset_cfg.train_size
+        # else:
+        #     self.size = self.dataset_cfg.val_size
+
+        # determining dataset size - if not specified, use all demos in directory once
+        size = self.dataset_cfg.train_size if "train" in self.type else self.dataset_cfg.val_size
+        if size is not None:
+            self.size = size
+        else:
+            self.size = self.num_demos
+
+        # setting sample sizes
         self.scene = self.dataset_cfg.scene
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
         self.world_frame = self.dataset_cfg.world_frame        
     
     def __len__(self):
-        return self.num_demos
+        # return self.num_demos
+        return self.size
     
     def __getitem__(self, index):
+        file_index = index % self.num_demos
+
         # load data
-        demo = np.load(self.dataset_dir / f"demo_{index}.npz", allow_pickle=True)
+        demo = np.load(self.dataset_dir / f"demo_{file_index}.npz", allow_pickle=True)
         action_pc = torch.as_tensor(demo["action_pc"]).float()
         action_seg = torch.as_tensor(demo["action_seg"]).int()
         anchor_pc = torch.as_tensor(demo["anchor_pc"]).float()
         anchor_seg = torch.as_tensor(demo["anchor_seg"]).int()
-        speed_factor = torch.as_tensor(demo["speed_factor"]).float()
         flow = torch.as_tensor(demo["flow"]).float()
-        rot = torch.as_tensor(demo["rot"]).float()
-        trans = torch.as_tensor(demo["trans"]).float()
+
+        # source-dependent fields
+        if self.dataset_cfg.source == "dedo":
+            speed_factor = torch.as_tensor(demo["speed_factor"]).float()
+            rot = torch.as_tensor(demo["rot"]).float()
+            trans = torch.as_tensor(demo["trans"]).float()
+        elif self.dataset_cfg.source == "real":
+            speed_factor = torch.ones(1)
+            rot = torch.zeros(3)
+            trans = torch.zeros(3)
+        else:
+            raise ValueError(f"Unknown source: {self.dataset_cfg.source}")
 
         # initializing item
         item = {
@@ -184,33 +209,58 @@ class ProcClothFlowDataset(data.Dataset):
 
 
 class ProcClothPointDataset(data.Dataset):
-    def __init__(self, root, dataset_cfg, type="train"):
+    def __init__(self, root, dataset_cfg, type):
         super().__init__()
         self.root = root
         self.type = type
         self.dataset_dir = self.root / self.type
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
-
         self.dataset_cfg = dataset_cfg
+
+        # # setting dataset size
+        # if "train" in self.type:
+        #     self.size = self.dataset_cfg.train_size
+        # else:
+        #     self.size = self.dataset_cfg.val_size
+
+        # determining dataset size - if not specified, use all demos in directory once
+        size = self.dataset_cfg.train_size if "train" in self.type else self.dataset_cfg.val_size
+        if size is not None:
+            self.size = size
+        else:
+            self.size = self.num_demos
+
+        # setting sample sizes
         self.scene = self.dataset_cfg.scene
         self.sample_size_action = self.dataset_cfg.sample_size_action
         self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
         self.world_frame = self.dataset_cfg.world_frame
 
     def __len__(self):
-        return self.num_demos
+        # return self.num_demos
+        return self.size
     
     def __getitem__(self, index):
+        file_index = index % self.num_demos
         # load data
-        demo = np.load(self.dataset_dir / f"demo_{index}.npz", allow_pickle=True)
+        demo = np.load(self.dataset_dir / f"demo_{file_index}.npz", allow_pickle=True)
         action_pc = torch.as_tensor(demo["action_pc"]).float()
         action_seg = torch.as_tensor(demo["action_seg"]).int()
         anchor_pc = torch.as_tensor(demo["anchor_pc"]).float()
         anchor_seg = torch.as_tensor(demo["anchor_seg"]).int()
-        speed_factor = torch.as_tensor(demo["speed_factor"]).float()
         flow = torch.as_tensor(demo["flow"]).float()
-        rot = torch.as_tensor(demo["rot"]).float()
-        trans = torch.as_tensor(demo["trans"]).float()
+
+        # source-dependent fields
+        if self.dataset_cfg.source == "dedo":
+            speed_factor = torch.as_tensor(demo["speed_factor"]).float()
+            rot = torch.as_tensor(demo["rot"]).float()
+            trans = torch.as_tensor(demo["trans"]).float()
+        elif self.dataset_cfg.source == "real":
+            speed_factor = torch.ones(1)
+            rot = torch.zeros(3)
+            trans = torch.zeros(3)
+        else:
+            raise ValueError(f"Unknown source: {self.dataset_cfg.source}")
 
         # initializing item
         item = {
@@ -228,9 +278,18 @@ class ProcClothPointDataset(data.Dataset):
             action_pc = action_pc.squeeze(0)
             action_seg = action_seg[action_pc_indices.squeeze(0)]
             flow = flow[action_pc_indices.squeeze(0)]
+
+
+        # randomly occlude the anchor
+        # anchor_pc_temp, temp_mask = plane_occlusion(anchor_pc, return_mask=True)
+        # if anchor_pc_temp.shape[0] > self.sample_size_anchor:
+        #     anchor_pc = anchor_pc_temp
+        #     anchor_seg = anchor_seg[temp_mask]
+
         # downsample anchor
-        anchor_pc, _ = downsample_pcd(anchor_pc.unsqueeze(0), self.sample_size_anchor, type=self.dataset_cfg.downsample_type)
+        anchor_pc, anchor_pc_indices = downsample_pcd(anchor_pc.unsqueeze(0), self.sample_size_anchor, type=self.dataset_cfg.downsample_type)
         anchor_pc = anchor_pc.squeeze(0)
+        anchor_seg = anchor_seg[anchor_pc_indices.squeeze(0)]
 
         # kinda confusing variables names for now, just for consistency
         points_action = action_pc + flow
@@ -249,6 +308,7 @@ class ProcClothPointDataset(data.Dataset):
             raise ValueError(f"Unknown center type: {self.dataset_cfg.center_type}")
         goal_points_action = points_action - center
         goal_points_anchor = points_anchor - center
+
 
         # Randomly transform the point clouds
         T0 = random_se3(
@@ -304,14 +364,28 @@ DATASET_FN = {
 
 
 class ProcClothFlowDataModule(L.LightningDataModule):
-    def __init__(self, root, batch_size, val_batch_size, num_workers, dataset_cfg):# type, scene):
+    def __init__(self, batch_size, val_batch_size, num_workers, dataset_cfg):# type, scene):
         super().__init__()
-        self.root = root
+        # self.root = root
         self.batch_size = batch_size
         self.val_batch_size = val_batch_size
         self.num_workers = num_workers
         self.stage = None
         self.dataset_cfg = dataset_cfg
+
+        # setting root directory based on dataset type
+        data_dir = os.path.expanduser(dataset_cfg.data_dir)
+        self.cloth_geometry = self.dataset_cfg.cloth_geometry
+        self.cloth_pose = self.dataset_cfg.cloth_pose
+        self.anchor_geometry = self.dataset_cfg.anchor_geometry
+        self.anchor_pose = self.dataset_cfg.anchor_pose
+        self.hole = self.dataset_cfg.hole
+        exp_dir = (
+            f'cloth={self.cloth_geometry}-{self.cloth_pose} ' + \
+            f'anchor={self.anchor_geometry}-{self.anchor_pose} ' + \
+            f'hole={self.hole}'
+        )
+        self.root = Path(data_dir) / exp_dir
 
     def prepare_data(self) -> None:
         pass
@@ -340,28 +414,30 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             #self.dataset_cfg.rotation_variance = 0.0
             #self.dataset_cfg.translation_variance = 0.0
 
-        # TODO: this needs to be fixed later
-        if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
-            train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
-            val_type = "val"
-            val_ood_type = "val_ood"
-        elif "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 1:
-            train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
-            val_type = f"val_{self.dataset_cfg.multi_cloth.size}"
-            val_ood_type = f"val_ood_{self.dataset_cfg.multi_cloth.size}"
-        else:
-            train_type = "train"
-            val_type = "val"
-            val_ood_type = "val_ood"
+        # # TODO: this needs to be fixed later
+        # if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
+        #     train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
+        #     val_type = "val"
+        #     val_ood_type = "val_ood"
+        # elif "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 1:
+        #     train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
+        #     val_type = f"val_{self.dataset_cfg.multi_cloth.size}"
+        #     val_ood_type = f"val_ood_{self.dataset_cfg.multi_cloth.size}"
+        # else:
+        #     train_type = "train"
+        #     val_type = "val"
+        #     val_ood_type = "val_ood"
+
+        
         
         self.train_dataset = DATASET_FN[self.dataset_cfg.type](
-            self.root, self.dataset_cfg, train_type
+            self.root, self.dataset_cfg, "train_tax3d"
         )
         self.val_dataset = DATASET_FN[self.dataset_cfg.type](
-            self.root, self.dataset_cfg, val_type
+            self.root, self.dataset_cfg, "val_tax3d"
         )
         self.val_ood_dataset = DATASET_FN[self.dataset_cfg.type](
-            self.root, self.dataset_cfg, val_ood_type
+            self.root, self.dataset_cfg, "val_ood_tax3d"
         )
     
     def train_dataloader(self):
@@ -397,48 +473,9 @@ def cloth_collate_fn(batch):
     # we need to convert it to a dictionary of lists
     keys = batch[0].keys()
     out = {k: None for k in keys}
-
     for k in keys:
         if k == "deform_params":
             out[k] = [item[k] for item in batch]
         else:
             out[k] = torch.stack([item[k] for item in batch])
     return out
-
-
-if __name__ == "__main__":
-    dir = Path("/home/eycai/datasets/nrp/ProcCloth/multi_cloth_1/val_ood_1")
-    import rpad.visualize_3d.plots as vpl
-    for i in range(40):
-        demo = np.load(dir / f"demo_{i}.npz", allow_pickle=True)
-        action = demo["action_pc"]
-        anchor = demo["anchor_pc"]
-        action_seg = demo["action_seg"]
-        anchor_seg = demo["anchor_seg"]
-        flow = demo["flow"]
-        goal = action + flow
-
-
-        rot = demo["rot"]
-        trans = demo["trans"]
-        print(rot, trans)
-        # print(demo["deform_params"])
-        continue
-
-        # action = torch.tensor(action).float()
-        # action, indices = downsample_pcd(action.unsqueeze(0), 512, type="fps")
-        # action_seg = action_seg[indices.squeeze(0)]
-        # vpl.segmentation_fig(action.squeeze(0), action_seg.astype(int)).show()
-
-
-
-        action_seg = np.ones_like(action_seg).astype(np.int32)
-        anchor_seg = np.zeros_like(anchor_seg).astype(np.int32)
-        goal_seg = np.ones_like(action_seg).astype(np.int32) * 5
-
-        fig = vpl.segmentation_fig(
-            np.concatenate([action, anchor, goal], axis=0),
-            np.concatenate([action_seg, anchor_seg, goal_seg], axis=0),
-        )
-        fig.show()
-    print('done')

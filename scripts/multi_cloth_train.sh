@@ -49,6 +49,12 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
 
   MODEL_PARAMS="model=df_cross model.type=point"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
+# linear regression baseline
+elif [ $MODEL_TYPE == "linear" ]; then
+  echo "Training linear regression model with command: $COMMAND."
+
+  MODEL_PARAMS="model=linear model.type=point"
+  DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
 else
   echo "Invalid model type."
 fi

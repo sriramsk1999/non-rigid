@@ -7,8 +7,8 @@
 # 4. the rest of the arguments for the eval script
 
 # Example usage:
-# ./multi_cloth_eval.sh 0 cross_point_relative `CHECKPOINT`
-# ./multi_cloth_eval.sh 1 scene_flow `CHECKPOINT` dataset.multi_cloth.hole=single dataset.multi_cloth.size=100
+# ./multi_cloth_vis.sh 0 cross_point_relative `CHECKPOINT`
+# ./multi_cloth_vis.sh 1 scene_flow `CHECKPOINT` dataset.multi_cloth.hole=single dataset.multi_cloth.size=100
 
 GPU_INDEX=$1
 MODEL_TYPE=$2
@@ -48,17 +48,11 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
 
   MODEL_PARAMS="model=df_cross model.type=point"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
-#  linear regression baseline
-elif [ $MODEL_TYPE == "linear" ]; then
-  echo "Evaluating linear regression model at checkpoint $CHECKPOINT with command: $COMMAND."
-
-  MODEL_PARAMS="model=linear model.type=point"
-  DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
 else
   echo "Invalid model type."
 fi
 
-python eval_cloth.py \
+python vis_cloth.py \
   $MODEL_PARAMS \
   $DATASET_PARAMS \
   resources.gpus=[${GPU_INDEX}] \

@@ -5,11 +5,20 @@ import torch
 import torch.utils._pytree as pytree
 import wandb
 
-from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule, PointPredictionInferenceModule
+from non_rigid.models.df_base import (
+    DiffusionFlowBase, 
+    FlowPredictionInferenceModule, 
+    PointPredictionInferenceModule
+)
+from non_rigid.models.regression import (
+    LinearRegression,
+    LinearRegressionInferenceModule,
+)
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
 
 import matplotlib.pyplot as plt
 import os
+from functools import partial
 from pathlib import Path
 from matplotlib import interactive
 
@@ -237,21 +246,22 @@ def main(cfg):
     torch.set_float32_matmul_precision("medium")
     # Global seed for reproducibility.
     L.seed_everything(42)
-    data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
 
-    # based on multi cloth dataset, update data root
-    if "multi_cloth" in cfg.dataset:
-        if cfg.dataset.multi_cloth.hole == "single":
-            print("Running metric evals on single-hole dataset.")
-            data_root = data_root / "multi_cloth_1/"
-        elif cfg.dataset.multi_cloth.hole == "double":
-            print("Running metric evals on double-hole dataset.")
-            data_root = data_root / "multi_cloth_2/"
-        elif cfg.dataset.multi_cloth.hole == "all":
-            print("Running metric evals on single- and double-hole dataset.")
-            data_root = data_root / "multi_cloth_all/"
-        else:
-            raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
+    # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+
+    # # based on multi cloth dataset, update data root
+    # if "multi_cloth" in cfg.dataset:
+    #     if cfg.dataset.multi_cloth.hole == "single":
+    #         print("Running metric evals on single-hole dataset.")
+    #         data_root = data_root / "multi_cloth_1/"
+    #     elif cfg.dataset.multi_cloth.hole == "double":
+    #         print("Running metric evals on double-hole dataset.")
+    #         data_root = data_root / "multi_cloth_2/"
+    #     elif cfg.dataset.multi_cloth.hole == "all":
+    #         print("Running metric evals on single- and double-hole dataset.")
+    #         data_root = data_root / "multi_cloth_all/"
+    #     else:
+    #         raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
 
 
     # if cfg.dataset.type not in ["cloth", "cloth_point"]:
@@ -265,7 +275,7 @@ def main(cfg):
         raise NotImplementedError('This script is only for full action inference.')
 
     datamodule = ProcClothFlowDataModule(
-        root=data_root,
+        # root=data_root,
         batch_size=1, # cfg.inference.batch_size,
         val_batch_size=1, # cfg.inference.val_batch_size,
         num_workers=cfg.resources.num_workers,
@@ -275,13 +285,22 @@ def main(cfg):
     datamodule.setup(stage="predict")
 
 
-    # LOAD THE MODEL ###
-    network = DiffusionFlowBase(
-        # in_channels=cfg.model.in_channels,
-        # learn_sigma=cfg.model.learn_sigma,
-        # model=cfg.model.dit_arch,
-        model_cfg=cfg.model,
-    )
+
+    if cfg.model.name in ["df_base", "df_cross"]:
+        network_fn = DiffusionFlowBase
+        flow_module_fn = FlowPredictionInferenceModule
+        point_module_fn = partial(PointPredictionInferenceModule, task_type=cfg.task_type)
+    elif cfg.model.name in ["linear_regression"]:
+        network_fn = LinearRegression
+        flow_module_fn = None
+        point_module_fn = LinearRegressionInferenceModule
+    else:
+        raise ValueError(f"Unsupported model name: {cfg.model.name}")
+    
+    network = network_fn(model_cfg=cfg.model)
+
+
+
     # get checkpoint file (for now, this does not log a run)
     checkpoint_reference = cfg.checkpoint.reference
     # TODO: load a proper check point here
@@ -299,7 +318,7 @@ def main(cfg):
     network.load_state_dict(
         {k.partition(".")[2]: v for k, v, in ckpt["state_dict"].items()}
     )
-    
+    breakpoint()
     # setting sample sizes
     if "scene" in cfg.dataset and cfg.dataset.scene:
         if cfg.model.type != "flow":
@@ -308,7 +327,7 @@ def main(cfg):
     else:
         cfg.inference.sample_size = cfg.dataset.sample_size_action
         cfg.inference.sample_size_anchor = cfg.dataset.sample_size_anchor
-    
+    breakpoint()
     # # override the task type here based on the dataset
     # if "cloth" in cfg.dataset.type:
     #     cfg.task_type = "cloth"
@@ -319,13 +338,11 @@ def main(cfg):
 
 
     if cfg.model.type == "flow":
-        model = FlowPredictionInferenceModule(
-            network, inference_cfg=cfg.inference, model_cfg=cfg.model
-        )
+        model = flow_module_fn(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
     elif cfg.model.type == "point":
-        model = PointPredictionInferenceModule(
-            network, task_type=cfg.task_type, inference_cfg=cfg.inference, model_cfg=cfg.model
-        )
+        model = point_module_fn(network, inference_cfg=cfg.inference, model_cfg=cfg.model)
+    else:
+        raise ValueError(f"Unsupported model type: {cfg.model.type}")
     model.eval()
     model.to(f'cuda:{cfg.resources.gpus[0]}')
 

@@ -220,7 +220,15 @@ class FlowPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_flows_wta = pred_flow[torch.arange(bs), winner]
-        return pred_flows_wta, pred_flow, cos_sim_wta, rmse_wta
+        return {
+            "pred_flows_wta": pred_flows_wta,
+            "pred_flow": pred_flow,
+            "cos_sim_wta": cos_sim_wta,
+            "cos_sim": cos_sim,
+            "rmse_wta": rmse_wta,
+            "rmse": rmse,
+        }
+        # return pred_flows_wta, pred_flow, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(
@@ -257,14 +265,23 @@ class FlowPredictionTrainingModule(L.LightningModule):
 
         # Additional logging
         if do_additional_logging:
-            pred_flows_wta, pred_flows, cos_sim_wta, rmse_wta = self.predict_wta(
-                batch, mode="val"
-            )
+        #     pred_flows_wta, pred_flows, cos_sim_wta, rmse_wta = self.predict_wta(
+        #         batch, mode="val"
+        #     )
+            pred_wta_dict = self.predict_wta(batch, mode="val")
+            pred_flows_wta = pred_wta_dict["pred_flows_wta"]
+            pred_flows = pred_wta_dict["pred_flow"]
+            cos_sim_wta = pred_wta_dict["cos_sim_wta"]
+            rmse_wta = pred_wta_dict["rmse_wta"]
+            cos_sim = pred_wta_dict["cos_sim"]
+            rmse = pred_wta_dict["rmse"]
 
             self.log_dict(
                 {
                     f"train_wta/cos_sim": cos_sim_wta.mean(),
                     f"train_wta/rmse": rmse_wta.mean(),
+                    f"train/cos_sim": cos_sim.mean(),
+                    f"train/rmse": rmse.mean(),
                 },
                 add_dataloader_idx=False,
                 prog_bar=True,
@@ -302,9 +319,16 @@ class FlowPredictionTrainingModule(L.LightningModule):
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
         with torch.no_grad():
-            pred_flows_wta, pred_flows, cos_sim_wta, rmse_wta = self.predict_wta(
-                batch, mode="val"
-            )
+            # pred_flows_wta, pred_flows, cos_sim_wta, rmse_wta = self.predict_wta(
+            #     batch, mode="val"
+            # )
+            pred_wta_dict = self.predict_wta(batch, mode="val")
+            pred_flows_wta = pred_wta_dict["pred_flows_wta"]
+            pred_flows = pred_wta_dict["pred_flow"]
+            cos_sim_wta = pred_wta_dict["cos_sim_wta"]
+            rmse_wta = pred_wta_dict["rmse_wta"]
+            cos_sim = pred_wta_dict["cos_sim"]
+            rmse = pred_wta_dict["rmse"]
 
         #########################################################
         # Logging
@@ -313,6 +337,8 @@ class FlowPredictionTrainingModule(L.LightningModule):
             {
                 f"val_wta_cos_sim_{dataloader_idx}": cos_sim_wta.mean(),
                 f"val_wta_rmse_{dataloader_idx}": rmse_wta.mean(),
+                f"val_cos_sim_{dataloader_idx}": cos_sim.mean(),
+                f"val_rmse_{dataloader_idx}": rmse.mean(),
             },
             add_dataloader_idx=False,
             prog_bar=True,
@@ -642,7 +668,16 @@ class PointPredictionTrainingModule(L.LightningModule):
         cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_actions_wta = pred_action[torch.arange(bs), winner]
-        return pred_actions_wta, pred_action, cos_sim_wta, rmse_wta
+
+        return {
+            "pred_actions_wta": pred_actions_wta,
+            "pred_action": pred_action,
+            "cos_sim_wta": cos_sim_wta,
+            "rmse_wta": rmse_wta,
+            "cos_sim": cos_sim,
+            "rmse": rmse,
+        }
+        # return pred_actions_wta, pred_action, cos_sim_wta, rmse_wta
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(
@@ -679,14 +714,23 @@ class PointPredictionTrainingModule(L.LightningModule):
 
         # Additional logging
         if do_additional_logging:
-            pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
-                batch, mode="val"
-            )
+            # pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
+            #     batch, mode="val"
+            # )
+            pred_wta_dict = self.predict_wta(batch, mode="val")
+            pred_actions_wta = pred_wta_dict["pred_actions_wta"]
+            pred_actions = pred_wta_dict["pred_action"]
+            cos_sim_wta = pred_wta_dict["cos_sim_wta"]
+            rmse_wta = pred_wta_dict["rmse_wta"]
+            cos_sim = pred_wta_dict["cos_sim"]
+            rmse = pred_wta_dict["rmse"]
 
             self.log_dict(
                 {
                     f"train_wta/cos_sim": cos_sim_wta.mean(),
                     f"train_wta/rmse": rmse_wta.mean(),
+                    f"train/cos_sim": cos_sim.mean(),
+                    f"train/rmse": rmse.mean(),
                 },
                 add_dataloader_idx=False,
                 prog_bar=True,
@@ -744,9 +788,16 @@ class PointPredictionTrainingModule(L.LightningModule):
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         self.eval()
         with torch.no_grad():
-            pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
-                batch, mode="val"
-            )
+            # pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
+            #     batch, mode="val"
+            # )
+            pred_wta_dict = self.predict_wta(batch, mode="val")
+            pred_actions_wta = pred_wta_dict["pred_actions_wta"]
+            pred_actions = pred_wta_dict["pred_action"]
+            cos_sim_wta = pred_wta_dict["cos_sim_wta"]
+            rmse_wta = pred_wta_dict["rmse_wta"]
+            cos_sim = pred_wta_dict["cos_sim"]
+            rmse = pred_wta_dict["rmse"]
 
         #########################################################
         # Logging
@@ -755,6 +806,8 @@ class PointPredictionTrainingModule(L.LightningModule):
             {
                 f"val_wta_cos_sim_{dataloader_idx}": cos_sim_wta.mean(),
                 f"val_wta_rmse_{dataloader_idx}": rmse_wta.mean(),
+                f"val_cos_sim_{dataloader_idx}": cos_sim.mean(),
+                f"val_rmse_{dataloader_idx}": rmse.mean(),
             },
             add_dataloader_idx=False,
             prog_bar=True,
@@ -816,6 +869,7 @@ class PointPredictionTrainingModule(L.LightningModule):
 
     @torch.no_grad()
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
+        raise NotImplementedError("Predict step not implemented for PointPredictionTrainingModule")
         pred_actions_wta, pred_actions, cos_sim_wta, rmse_wta = self.predict_wta(
             batch, mode="val"
         )

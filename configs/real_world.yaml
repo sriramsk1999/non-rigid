@@ -1,0 +1,34 @@
+mode: eval
+
+job_type: ${mode}
+
+defaults:
+  - model: df_cross
+  - _logging
+  - _self_
+
+seed: 42
+task_type: None
+
+inference:
+  batch_size: 1
+  val_batch_size: 1
+  sample_size: 512
+  sample_size_anchor: 512
+  num_wta_trials: 20
+  num_trials: 1
+  action_full: False
+
+checkpoint:
+  run_id: ???
+  reference: ${wandb.entity}/${wandb.project}/model-${checkpoint.run_id}:best
+
+resources:
+  num_workers: 4
+  gpus:
+    - 0
+
+data_path: "~/Documents/data/real world/experiment/scene_obs.npz"
+
+wandb:
+  group: ???

@@ -19,6 +19,10 @@ from non_rigid.models.df_base import (
     FlowPredictionTrainingModule,
     PointPredictionTrainingModule,
 )
+from non_rigid.models.regression import (
+    LinearRegression,
+    LinearRegressionTrainingModule,
+)
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     CustomModelPlotsCallback,
@@ -61,20 +65,20 @@ def main(cfg):
     # or with an if statement, or by using hydra.instantiate.
     ######################################################################
 
-    data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
+    # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
 
-    # based on multi cloth dataset, update data root
-    if "multi_cloth" in cfg.dataset:
-        if cfg.dataset.multi_cloth.hole == "single":
-            data_root = data_root / "multi_cloth_1/"
-        elif cfg.dataset.multi_cloth.hole == "double":
-            data_root = data_root / "multi_cloth_2/"
-        elif cfg.dataset.multi_cloth.hole == "all":
-            data_root = data_root / "multi_cloth_all/"
-        else:
-            raise ValueError(
-                f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}"
-            )
+    # # based on multi cloth dataset, update data root
+    # if "multi_cloth" in cfg.dataset:
+    #     if cfg.dataset.multi_cloth.hole == "single":
+    #         data_root = data_root / "multi_cloth_1/"
+    #     elif cfg.dataset.multi_cloth.hole == "double":
+    #         data_root = data_root / "multi_cloth_2/"
+    #     elif cfg.dataset.multi_cloth.hole == "all":
+    #         data_root = data_root / "multi_cloth_all/"
+    #     else:
+    #         raise ValueError(
+    #             f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}"
+    #         )
         
     # check that dataset and model types are compatible
     if cfg.model.type != cfg.dataset.type:
@@ -104,7 +108,7 @@ def main(cfg):
 
 
     datamodule = dm(
-        root=data_root,
+        # root=data_root,
         batch_size=cfg.training.batch_size,
         val_batch_size=cfg.training.val_batch_size,
         num_workers=cfg.resources.num_workers,
@@ -129,12 +133,26 @@ def main(cfg):
 
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
-    network = DiffusionFlowBase(
-        # in_channels=cfg.model.in_channels,
-        # learn_sigma=cfg.model.learn_sigma,
-        # model=cfg.model.dit_arch, # TODO: configs won't ahve this anymore?
-        model_cfg=cfg.model,
-    )
+
+    if cfg.model.name in ["df_base", "df_cross"]:
+        network_fn = DiffusionFlowBase
+        flow_module_fn = FlowPredictionTrainingModule
+        # TODO: this is passing in None as task type, but doesn't matter for now
+        point_module_fn = partial(PointPredictionTrainingModule, task_type=cfg.task_type)
+    elif cfg.model.name in ["linear_regression"]:
+        network_fn = LinearRegression
+        flow_module_fn = None
+        point_module_fn = LinearRegressionTrainingModule
+    else:
+        raise ValueError(f"Unknown model name: {cfg.model.name}")
+    
+    network = network_fn(model_cfg=cfg.model)
+    # network = DiffusionFlowBase(
+    #     # in_channels=cfg.model.in_channels,
+    #     # learn_sigma=cfg.model.learn_sigma,
+    #     # model=cfg.model.dit_arch, # TODO: configs won't ahve this anymore?
+    #     model_cfg=cfg.model,
+    # )
 
     ######################################################################
     # Create the training module.
@@ -172,16 +190,18 @@ def main(cfg):
     #     raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
 
     if cfg.model.type == "flow":
-        model = FlowPredictionTrainingModule(
-            network, training_cfg=cfg.training, model_cfg=cfg.model
-        )
+        # model = FlowPredictionTrainingModule(
+        #     network, training_cfg=cfg.training, model_cfg=cfg.model
+        # )
+        model = flow_module_fn(network, training_cfg=cfg.training, model_cfg=cfg.model)
     elif cfg.model.type == "point":
-        model = PointPredictionTrainingModule(
-            network,
-            task_type=cfg.task_type,
-            training_cfg=cfg.training,
-            model_cfg=cfg.model,
-        )
+        # model = PointPredictionTrainingModule(
+        #     network,
+        #     task_type=cfg.task_type,
+        #     training_cfg=cfg.training,
+        #     model_cfg=cfg.model,
+        # )
+        model = point_module_fn(network, training_cfg=cfg.training, model_cfg=cfg.model)
     else:
         raise ValueError(f"Unsupported model type: {cfg.model.type}")
 
@@ -255,13 +275,21 @@ def main(cfg):
             ),
             ModelCheckpoint(
                 dirpath=cfg.lightning.checkpoint_dir,
-                filename="{epoch}-{step}-{val_wta_rmse:.3f}",
+                filename="{epoch}-{step}-{val_wta_rmse_0:.3f}",
                 monitor="val_wta_rmse_0",
                 mode="min",
                 save_weights_only=False,
                 save_last=False,
-                auto_insert_metric_name=False,
+                # auto_insert_metric_name=False,
             ),
+            # ModelCheckpoint(
+            #     dirpath=cfg.lightning.checkpoint_dir,
+            #     filename="{epoch}-{step}-{val_rmse_0:.3f}",
+            #     monitor="val_rmse_0",
+            #     mode="min",
+            #     save_weights_only=False,
+            #     save_last=False,
+            # )
             # This checkpoint will get saved to WandB. The Callback mechanism in lightning is poorly designed, so we have to put it last.
             # ModelCheckpoint(
             #     dirpath=cfg.lightning.checkpoint_dir,

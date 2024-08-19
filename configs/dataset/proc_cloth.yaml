@@ -1,6 +1,11 @@
 name: proc_cloth
 data_dir: "~/datasets/nrp/ProcCloth/"
+# data_dir : "~/Documents/data/real world"
 type: point # (flow, point) Type of dataset
+source: real # (real, dedo, etc.) Source of the dataset
+
+train_size: null # (int, null) Length of the train dataset
+val_size: null # (int, null) Length of the validation dataset
 
 sample_size_action: 512
 sample_size_anchor: 512
@@ -9,9 +14,15 @@ downsample_type: fps
 scene: True
 world_frame: True
 
-multi_cloth:
-  hole: single
-  size: 100
+# multi_cloth:
+#   hole: single
+#   size: 100
+
+cloth_geometry: single
+cloth_pose: fixed
+anchor_geometry: single
+anchor_pose: random
+hole: single
 
 # Dataset pre-processing options
 center_type: anchor_center # [action_center, anchor_center, anchor_random, none], centers the point clouds w.r.t. the action, anchor, or no centering
