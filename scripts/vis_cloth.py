@@ -20,6 +20,7 @@ from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
     create_model,
+    create_datamodule,
     match_fn,
     flatten_outputs
 )
@@ -86,47 +87,31 @@ def main(cfg):
     # Should be the same one as in training, but we're gonna use val+test
     # dataloaders.
     ######################################################################
+    cfg, datamodule = create_datamodule(cfg)
 
-    # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-
-    # # based on multi cloth dataset, update data root
-    # if "multi_cloth" in cfg.dataset:
-    #     if cfg.dataset.multi_cloth.hole == "single":
-    #         print("Running metric evals on single-hole dataset.")
-    #         data_root = data_root / "multi_cloth_1/"
-    #     elif cfg.dataset.multi_cloth.hole == "double":
-    #         print("Running metric evals on double-hole dataset.")
-    #         data_root = data_root / "multi_cloth_2/"
-    #     elif cfg.dataset.multi_cloth.hole == "all":
-    #         print("Running metric evals on single- and double-hole dataset.")
-    #         data_root = data_root / "multi_cloth_all/"
-    #     else:
-    #         raise ValueError(f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}")
+    # # check that dataset and model types are compatible
+    # if cfg.model.type != cfg.dataset.type:
+    #     raise ValueError(f"Model type: '{cfg.model.type}' and dataset type: '{cfg.dataset.type}' are incompatible.")
+    # elif cfg.model.type not in ["flow", "point"]:
+    #     raise ValueError(f"Unsupported model type: {cfg.model.type}.")
 
 
-    # check that dataset and model types are compatible
-    if cfg.model.type != cfg.dataset.type:
-        raise ValueError(f"Model type: '{cfg.model.type}' and dataset type: '{cfg.dataset.type}' are incompatible.")
-    elif cfg.model.type not in ["flow", "point"]:
-        raise ValueError(f"Unsupported model type: {cfg.model.type}.")
-
-
-    # if cfg.dataset.type in ["cloth", "cloth_point"]:
-    if cfg.dataset.name in ["proc_cloth"]:
-        dm = ProcClothFlowDataModule
-    else:
-        raise NotImplementedError('This script is only for cloth evaluations.')
+    # # if cfg.dataset.type in ["cloth", "cloth_point"]:
+    # if cfg.dataset.name in ["proc_cloth"]:
+    #     dm = ProcClothFlowDataModule
+    # else:
+    #     raise NotImplementedError('This script is only for cloth evaluations.')
     
-    if cfg.viz:
-        cfg.dataset.sample_size_action = -1
-    datamodule = dm(
-        # root=data_root,
-        batch_size=cfg.inference.batch_size,
-        val_batch_size=cfg.inference.val_batch_size,
-        num_workers=cfg.resources.num_workers,
-        dataset_cfg=cfg.dataset,
-    )
-    datamodule.setup(stage="predict")
+    # if cfg.viz:
+    #     cfg.dataset.sample_size_action = -1
+    # datamodule = dm(
+    #     # root=data_root,
+    #     batch_size=cfg.inference.batch_size,
+    #     val_batch_size=cfg.inference.val_batch_size,
+    #     num_workers=cfg.resources.num_workers,
+    #     dataset_cfg=cfg.dataset,
+    # )
+    # datamodule.setup(stage="predict")
 
 
     ######################################################################
@@ -139,12 +124,9 @@ def main(cfg):
 
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
-    network = DiffusionFlowBase(
-        # in_channels=cfg.model.in_channels,
-        # learn_sigma=cfg.model.learn_sigma,
-        # model=cfg.model.dit_arch,
-        model_cfg=cfg.model,
-    )
+    network, model = create_model(cfg)
+
+
     # get checkpoint file (for now, this does not log a run)
     checkpoint_reference = cfg.checkpoint.reference
     if checkpoint_reference.startswith(cfg.wandb.entity):
@@ -161,66 +143,17 @@ def main(cfg):
     )
     # set model to eval mode
     network.eval()
-    # move network to gpu for evaluation
-    # if torch.cuda.is_available():
-    #     network.to(f"cuda:{cfg.resources.gpus[0]}")
-    
-    # setting sample sizes
-    if "scene" in cfg.dataset and cfg.dataset.scene:
-        # if cfg.model.type != "flow":
-        if cfg.model.name != "df_base":
-            raise NotImplementedError("Scene inputs cannot be used with cross-type models.")
-        cfg.inference.sample_size = cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
-    else:
-        cfg.inference.sample_size = cfg.dataset.sample_size_action
-        cfg.inference.sample_size_anchor = cfg.dataset.sample_size_anchor
-
-    # # override the task type here based on the dataset
-    # if "cloth" in cfg.dataset.type:
-    #     cfg.task_type = "cloth"
-    # elif "rigid" in cfg.dataset.type:
-    #     cfg.task_type = "rigid"
-    # else:
-    #     raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
-
-    # create model
-    # if cfg.model.type in ["flow", "flow_cross"]:
-    if cfg.model.type == "flow":
-        model = FlowPredictionInferenceModule(
-            network, inference_cfg=cfg.inference, model_cfg=cfg.model
-        )
-    # elif cfg.model.type in ["point_cross"]:
-    elif cfg.model.type == "point":
-        model = PointPredictionInferenceModule(
-            network, task_type=cfg.task_type, inference_cfg=cfg.inference, model_cfg=cfg.model
-        )
-    else:
-        raise ValueError(f"Unsupported model type: {cfg.model.type}")
     model.eval()
-    # model.to(f'cuda:{cfg.resources.gpus[0]}')
 
     if cfg.model.name == "df_base":
         raise NotImplementedError("DF Base model is not supported for visualization.")
 
 
-    # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-    # # sample_size = cfg.dataset.sample_size
-    # # data_root = data_root / f"{cfg.dataset.obj_id}_flow_{cfg.dataset.type}"
-    # train_dataset = ProcClothFlowDataset(data_root, "train", **cfg.dataset.type_args)
-    # val_dataset = ProcClothFlowDataset(data_root, "val", **cfg.dataset.type_args)
-    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=16, shuffle=False)
-    # val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=4, shuffle=False)
-    # # num_wta_trials = 50
-    # diffusion = create_diffusion(timestep_respacing=None, diffusion_steps=cfg.model.diff_train_steps)
-    
-    # MMD_METRICS = False
-    # PRECISION_METRICS = False
-
     VISUALIZE_DEMOS = False
-    VISUALIZE_PREDS = False
+    VISUALIZE_PREDS = True
     VISUALIZE_SINGLE = False
     VISUALIZE_PULL = False
-    VISUALIZE_DATASET = True
+    VISUALIZE_DATASET = False
 
     ######################################################################
     # Run the model on the train/val/test sets.
@@ -298,23 +231,15 @@ def main(cfg):
         ).show()
 
     if VISUALIZE_PREDS:
+        num_preds = 5
         num_samples = 1
         model.to(device)
         dataloader = torch.utils.data.DataLoader(
-            datamodule.val_ood_dataset, batch_size=1, shuffle=False
+            datamodule.val_dataset, batch_size=1, shuffle=False
         )
         iterator = iter(dataloader)
 
-        import time
-        for _ in range(10):
-            batch = next(iterator)
-            t1 = time.time()
-            pred_dict = model.predict(batch, num_samples)
-            t2 = time.time()
-            print(f"Time taken: {t2 - t1}")
-        quit()
-
-        for _ in range(1):
+        for _ in range(num_preds):
             batch = next(iterator)
             pred_dict = model.predict(batch, num_samples)
             # extracting anchor point cloud depending on model type

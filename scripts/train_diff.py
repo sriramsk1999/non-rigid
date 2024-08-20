@@ -28,6 +28,7 @@ from non_rigid.utils.script_utils import (
     CustomModelPlotsCallback,
     LogPredictionSamplesCallback,
     create_model,
+    create_datamodule,
     match_fn,
 )
 
@@ -64,62 +65,13 @@ def main(cfg):
     # This could be swapped out for a different datamodule in-place,
     # or with an if statement, or by using hydra.instantiate.
     ######################################################################
-
-    # data_root = Path(os.path.expanduser(cfg.dataset.data_dir))
-
-    # # based on multi cloth dataset, update data root
-    # if "multi_cloth" in cfg.dataset:
-    #     if cfg.dataset.multi_cloth.hole == "single":
-    #         data_root = data_root / "multi_cloth_1/"
-    #     elif cfg.dataset.multi_cloth.hole == "double":
-    #         data_root = data_root / "multi_cloth_2/"
-    #     elif cfg.dataset.multi_cloth.hole == "all":
-    #         data_root = data_root / "multi_cloth_all/"
-    #     else:
-    #         raise ValueError(
-    #             f"Unknown multi-cloth dataset type: {cfg.dataset.multi_cloth.hole}"
-    #         )
-        
-    # check that dataset and model types are compatible
-    if cfg.model.type != cfg.dataset.type:
-        raise ValueError(
-            f"Model type: '{cfg.model.type}' and dataset type: '{cfg.dataset.type}' are incompatible."
-        )
-    elif cfg.model.type not in ["flow", "point"]:
-        raise ValueError(f"Unknown model type: {cfg.model.type}")
-    
-
-
-    # if cfg.dataset.type in ["articulated", "articulated_multi"]:
-    #     dm = MicrowaveFlowDataModule
-    # elif cfg.dataset.type in ["cloth", "cloth_point"]:
-    #     dm = ProcClothFlowDataModule
-    #     # determine type based on model type
-    # elif cfg.dataset.type in ["rigid_point", "rigid_flow", "ndf_point", "rpdiff_point"]:
-    #     dm = RigidDataModule  # TODO: Pass dataset cfg to all so we can remove partial
-    # else:
-    #     raise ValueError(f"Unknown dataset type: {cfg.dataset.type}")
-    
-
-    if cfg.dataset.name in ["proc_cloth"]:
-        dm = ProcClothFlowDataModule
-    else:
-        raise ValueError(f"Unknown dataset name: {cfg.dataset.name}.")
-
-
-    datamodule = dm(
-        # root=data_root,
-        batch_size=cfg.training.batch_size,
-        val_batch_size=cfg.training.val_batch_size,
-        num_workers=cfg.resources.num_workers,
-        dataset_cfg=cfg.dataset,
-    )
+    cfg, datamodule = create_datamodule(cfg)
 
     ######################################################################
     # Create the network(s) which will be trained by the Training Module.
     # The network should (ideally) be lightning-independent. This allows
     # us to use the network in other projects, or in other training
-    # configurations.
+    # configurations. Also create the Training Module.
     #
     # This might get a bit more complicated if we have multiple networks,
     # but we can just customize the training module and the Hydra configs
@@ -134,76 +86,15 @@ def main(cfg):
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
 
-    if cfg.model.name in ["df_base", "df_cross"]:
-        network_fn = DiffusionFlowBase
-        flow_module_fn = FlowPredictionTrainingModule
-        # TODO: this is passing in None as task type, but doesn't matter for now
-        point_module_fn = partial(PointPredictionTrainingModule, task_type=cfg.task_type)
-    elif cfg.model.name in ["linear_regression"]:
-        network_fn = LinearRegression
-        flow_module_fn = None
-        point_module_fn = LinearRegressionTrainingModule
-    else:
-        raise ValueError(f"Unknown model name: {cfg.model.name}")
-    
-    network = network_fn(model_cfg=cfg.model)
-    # network = DiffusionFlowBase(
-    #     # in_channels=cfg.model.in_channels,
-    #     # learn_sigma=cfg.model.learn_sigma,
-    #     # model=cfg.model.dit_arch, # TODO: configs won't ahve this anymore?
-    #     model_cfg=cfg.model,
+    network, model = create_model(cfg)
+
+
+    # datamodule.setup(stage="fit")
+    # cfg.training.num_training_steps = (
+    #     len(datamodule.train_dataloader()) * cfg.training.epochs
     # )
-
-    ######################################################################
-    # Create the training module.
-    # The training module is responsible for all the different parts of
-    # training, including the network, the optimizer, the loss function,
-    # and the logging.
-    ######################################################################
-
-    datamodule.setup(stage="fit")
-    cfg.training.num_training_steps = (
-        len(datamodule.train_dataloader()) * cfg.training.epochs
-    )
-    # updating the training sample size
-    # cfg.training.training_sample_size = cfg.dataset.sample_size
-
-    if "scene" in cfg.dataset and cfg.dataset.scene:
-        # if cfg.model.type != "flow":
-        if cfg.model.name != "df_base":
-            raise ValueError(
-                "Scene-based training cannot be used with cross-type models."
-            )
-        cfg.training.sample_size = (
-            cfg.dataset.sample_size_action + cfg.dataset.sample_size_anchor
-        )
-    else:
-        cfg.training.sample_size = cfg.dataset.sample_size_action
-        cfg.training.sample_size_anchor = cfg.dataset.sample_size_anchor
-
-    # # override the task type here based on the dataset
-    # if "cloth" in cfg.dataset.type:
-    #     cfg.task_type = "cloth"
-    # elif "rigid" in cfg.dataset.type or "rpdiff" in cfg.dataset.type:
-    #     cfg.task_type = "rigid"
-    # else:
-    #     raise ValueError(f"Unsupported dataset type: {cfg.dataset.type}")
-
-    if cfg.model.type == "flow":
-        # model = FlowPredictionTrainingModule(
-        #     network, training_cfg=cfg.training, model_cfg=cfg.model
-        # )
-        model = flow_module_fn(network, training_cfg=cfg.training, model_cfg=cfg.model)
-    elif cfg.model.type == "point":
-        # model = PointPredictionTrainingModule(
-        #     network,
-        #     task_type=cfg.task_type,
-        #     training_cfg=cfg.training,
-        #     model_cfg=cfg.model,
-        # )
-        model = point_module_fn(network, training_cfg=cfg.training, model_cfg=cfg.model)
-    else:
-        raise ValueError(f"Unsupported model type: {cfg.model.type}")
+    # # updating the training sample size
+    # # cfg.training.training_sample_size = cfg.dataset.sample_size
 
     # TODO: compiling model doesn't work with lightning out of the box?
     # model = torch.compile(model)

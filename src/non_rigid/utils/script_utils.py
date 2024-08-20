@@ -71,7 +71,6 @@ def create_model(cfg):
     return network, model
 
 
-# TODO: IMPLEMENT THIS FUNCTION
 def create_datamodule(cfg):
     # check that dataset and model types are compatible
     if cfg.model.type != cfg.dataset.type:
