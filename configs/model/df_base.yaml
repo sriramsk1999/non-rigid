@@ -9,5 +9,6 @@ center_noise: False
 rotary: False
 
 # diffusion settings
+# TODO: combine these into one param
 diff_train_steps: 100 # Number of diffusion steps during training
 diff_inference_steps: 100 # Number of diffusion steps during inference

@@ -355,14 +355,198 @@ class ProcClothPointDataset(data.Dataset):
         item["T_action2world"] = T_action2world.get_matrix().squeeze(0)
         return item
 
+
+
+class DeformablePlacementDataset(data.Dataset):
+    def __init__(self, root, dataset_cfg, split):
+        super().__init__()
+        self.root = root
+        self.split = split
+        self.dataset_dir = self.root / self.split
+        self.num_demos = int(len(os.listdir(self.dataset_dir)))
+        self.dataset_cfg = dataset_cfg
+
+        # determining dataset size - if not specified, use all demos in directory once
+        size = self.dataset_cfg.train_size if "train" in self.split else self.dataset_cfg.val_size
+        if size is not None:
+            self.size = size
+        else:
+            self.size = self.num_demos
+
+        # setting sample sizes
+        self.scene = self.dataset_cfg.scene
+        self.sample_size_action = self.dataset_cfg.sample_size_action
+        self.sample_size_anchor = self.dataset_cfg.sample_size_anchor
+        self.world_frame = self.dataset_cfg.world_frame
+
+    def __len__(self):
+        return self.size
+    
+    def __getitem__(self, index):
+        # loop over the dataset multiple times - allows for arbitrary dataset and batch size
+        file_index = index % self.num_demos
+        # load data
+        demo = np.load(self.dataset_dir / f"demo_{file_index}.npz", allow_pickle=True)
+        action_pc = torch.as_tensor(demo["action_pc"]).float()
+        action_seg = torch.as_tensor(demo["action_seg"]).int()
+        anchor_pc = torch.as_tensor(demo["anchor_pc"]).float()
+        anchor_seg = torch.as_tensor(demo["anchor_seg"]).int()
+        flow = torch.as_tensor(demo["flow"]).float()
+
+        # initializing item with source-dependent fields
+        if self.dataset_cfg.source == "dedo":
+            # speed_factor = torch.as_tensor(demo["speed_factor"]).float()
+            # rot = torch.as_tensor(demo["rot"]).float()
+            # trans = torch.as_tensor(demo["trans"]).float()
+            # deform_params = demo["deform_params"].item()
+
+            item = {
+                "rot": torch.as_tensor(demo["rot"]).float(),
+                "trans": torch.as_tensor(demo["trans"]).float(),
+                "deform_params": demo["deform_params"].item(),
+            }
+        elif self.dataset_cfg.source == "real":
+            # speed_factor = torch.ones(1)
+            # rot = torch.zeros(3)
+            # trans = torch.zeros(3)
+
+            item = {
+                "rot": torch.zeros(3),
+                "trans": torch.zeros(3),
+            }
+        else:
+            raise ValueError(f"Unknown source: {self.dataset_cfg.source}")
+        
+        # initializing item
+        # item = {
+        #     "rot": rot,
+        #     "trans": trans,
+        #     "deform_params": deform_params,
+        #     # "speed_factor": speed_factor,
+        # }
+
+        # downsample action
+        if self.sample_size_action > 0 and action_pc.shape[0] > self.sample_size_action:
+            action_pc, action_pc_indices = downsample_pcd(action_pc.unsqueeze(0), self.sample_size_action, type=self.dataset_cfg.downsample_type)
+            action_pc = action_pc.squeeze(0)
+            action_seg = action_seg[action_pc_indices.squeeze(0)]
+            flow = flow[action_pc_indices.squeeze(0)]
+
+        # downsample anchor
+        if self.sample_size_anchor > 0 and anchor_pc.shape[0] > self.sample_size_anchor:
+            anchor_pc, anchor_pc_indices = downsample_pcd(anchor_pc.unsqueeze(0), self.sample_size_anchor, type=self.dataset_cfg.downsample_type)
+            anchor_pc = anchor_pc.squeeze(0)
+            anchor_seg = anchor_seg[anchor_pc_indices.squeeze(0)]
+
+        # scene-level dataset
+        if self.scene:
+            scene_pc = torch.cat([action_pc, anchor_pc], dim=0)
+            scene_seg = torch.cat([action_seg, anchor_seg], dim=0)
+            anchor_flow = torch.zeros_like(anchor_pc)
+            scene_flow = torch.cat([flow, anchor_flow], dim=0)
+            goal_scene_pc = scene_pc + scene_flow
+
+            # center the point clouds
+            center = scene_pc.mean(axis=0)
+            scene_pc = scene_pc - center
+            goal_scene_pc = goal_scene_pc - center
+
+            # transform the point clouds
+            T1 = random_se3(
+                N=1,
+                rot_var=self.dataset_cfg.rotation_variance,
+                trans_var=self.dataset_cfg.translation_variance,
+                rot_sample_method=self.dataset_cfg.anchor_transform_type,
+            )
+            scene_pc = T1.transform_points(scene_pc)
+            goal_scene_pc = T1.transform_points(goal_scene_pc)
+            T_goal2world = T1.inverse().compose(
+                Translate(center.unsqueeze(0))
+            )
+
+            gt_flow = goal_scene_pc - scene_pc
+            item["pc"] = goal_scene_pc # Scene points in goal position
+            item["pc_action"] = scene_pc # Scene points in starting position
+            item["seg"] = scene_seg
+            item["flow"] = gt_flow
+            item["T_goal2world"] = T_goal2world.get_matrix().squeeze(0)
+        # object-centric dataset
+        else:
+            goal_action_pc = action_pc + flow
+
+            # center the point clouds
+            if self.dataset_cfg.center_type == "action_center":
+                center = action_pc.mean(axis=0)
+            elif self.dataset_cfg.center_type == "anchor_center":
+                center = anchor_pc.mean(axis=0)
+            elif self.dataset_cfg.center_type == "anchor_random":
+                center = anchor_pc[np.random.choice(len(anchor_pc))]
+            elif self.dataset_cfg.center_type == "none":
+                center = torch.zeros(3, dtype=torch.float32)
+            else:
+                raise ValueError(f"Unknown center type: {self.dataset_cfg.center_type}")
+            
+            if self.dataset_cfg.action_context_center_type == "center":
+                action_center = action_pc.mean(axis=0)
+            elif self.dataset_cfg.action_context_center_type == "random":
+                action_center = action_pc[np.random.choice(len(action_pc))]
+            elif self.dataset_cfg.action_context_center_type == "none":
+                action_center = torch.zeros(3, dtype=torch.float32)
+            else:
+                raise ValueError(f"Unknown action context center type: {self.dataset_cfg.action_context_center_type}")
+            
+            goal_action_pc = goal_action_pc - center
+            anchor_pc = anchor_pc - center
+            action_pc = action_pc - action_center
+
+            # transform the point clouds
+            T0 = random_se3(
+                N=1,
+                rot_var=self.dataset_cfg.rotation_variance,
+                trans_var=self.dataset_cfg.translation_variance,
+                rot_sample_method=self.dataset_cfg.action_transform_type,
+            )
+            T1 = random_se3(
+                N=1,
+                rot_var=self.dataset_cfg.rotation_variance,
+                trans_var=self.dataset_cfg.translation_variance,
+                rot_sample_method=self.dataset_cfg.anchor_transform_type,
+            )
+
+            goal_action_pc = T1.transform_points(goal_action_pc)
+            anchor_pc = T1.transform_points(anchor_pc)
+            action_pc = T0.transform_points(action_pc)
+
+            T_goal2world = T1.inverse().compose(
+                Translate(center.unsqueeze(0))
+            )
+            T_action2world = T0.inverse().compose(
+                Translate(action_center.unsqueeze(0))
+            )
+
+            gt_flow = goal_action_pc - action_pc
+            item["pc"] = goal_action_pc # Action points in goal position
+            item["pc_action"] = action_pc # Action points in starting position for context
+            item["pc_anchor"] = anchor_pc # Anchor points in goal position
+            item["seg"] = action_seg
+            item["seg_anchor"] = anchor_seg
+            item["flow"] = gt_flow
+            item["T_goal2world"] = T_goal2world.get_matrix().squeeze(0)
+            item["T_action2world"] = T_action2world.get_matrix().squeeze(0)
+        return item
+
+
+
+
 DATASET_FN = {
     # "cloth": ProcClothFlowDataset,
     # "cloth_point": ProcClothPointDataset,
-    "flow": ProcClothFlowDataset,
-    "point": ProcClothPointDataset,
+    "flow": DeformablePlacementDataset, #ProcClothFlowDataset,
+    "point": DeformablePlacementDataset,# ProcClothPointDataset,
 }
 
 
+# TODO: rename this to Deformable Data Module or something
 class ProcClothFlowDataModule(L.LightningDataModule):
     def __init__(self, batch_size, val_batch_size, num_workers, dataset_cfg):# type, scene):
         super().__init__()
@@ -413,21 +597,6 @@ class ProcClothFlowDataModule(L.LightningDataModule):
             #self.dataset_cfg.anchor_transform_type = "identity"
             #self.dataset_cfg.rotation_variance = 0.0
             #self.dataset_cfg.translation_variance = 0.0
-
-        # # TODO: this needs to be fixed later
-        # if "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 10:
-        #     train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
-        #     val_type = "val"
-        #     val_ood_type = "val_ood"
-        # elif "multi_cloth" in self.dataset_cfg and self.dataset_cfg.multi_cloth.size == 1:
-        #     train_type = f"train_{self.dataset_cfg.multi_cloth.size}"
-        #     val_type = f"val_{self.dataset_cfg.multi_cloth.size}"
-        #     val_ood_type = f"val_ood_{self.dataset_cfg.multi_cloth.size}"
-        # else:
-        #     train_type = "train"
-        #     val_type = "val"
-        #     val_ood_type = "val_ood"
-
         
         
         self.train_dataset = DATASET_FN[self.dataset_cfg.type](

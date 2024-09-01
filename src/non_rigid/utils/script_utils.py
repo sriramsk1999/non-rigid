@@ -23,6 +23,11 @@ from non_rigid.models.regression import (
     LinearRegressionInferenceModule,
     LinearRegressionTrainingModule,
 )
+from non_rigid.models.tax3d import (
+    DiffusionTransformerNetwork,
+    SceneDisplacementTrainingModule,
+)
+
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
 
 
@@ -68,6 +73,23 @@ def create_model(cfg):
     model = module_fn(network=network, model_cfg=cfg.model)
 
     # TODO: this should also check for a checkpoint id, and setup the network
+    return network, model
+
+
+def create_model2(cfg):
+    if cfg.model.name == "df_base":
+        network_fn = DiffusionTransformerNetwork
+        module_fn = SceneDisplacementTrainingModule
+    elif cfg.model.name == "df_cross":
+        raise NotImplementedError("NEED TO IMPLEMENT DF_CROSS FOR NEW CREATE MODEL FUNCTION.")
+    elif cfg.model.name == "linear_regression":
+        assert cfg.model.type == "point", "Only point regression is supported."
+        raise NotImplementedError("NEED TO IMPLEMENT LINEAR REGRESSION FOR NEW CREATE MODEL FUNCTION.")
+    
+    # create network and model
+    network = network_fn(model_cfg=cfg.model)
+    model = module_fn(network=network, cfg=cfg)
+
     return network, model
 
 

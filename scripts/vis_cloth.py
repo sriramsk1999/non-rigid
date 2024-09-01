@@ -89,31 +89,6 @@ def main(cfg):
     ######################################################################
     cfg, datamodule = create_datamodule(cfg)
 
-    # # check that dataset and model types are compatible
-    # if cfg.model.type != cfg.dataset.type:
-    #     raise ValueError(f"Model type: '{cfg.model.type}' and dataset type: '{cfg.dataset.type}' are incompatible.")
-    # elif cfg.model.type not in ["flow", "point"]:
-    #     raise ValueError(f"Unsupported model type: {cfg.model.type}.")
-
-
-    # # if cfg.dataset.type in ["cloth", "cloth_point"]:
-    # if cfg.dataset.name in ["proc_cloth"]:
-    #     dm = ProcClothFlowDataModule
-    # else:
-    #     raise NotImplementedError('This script is only for cloth evaluations.')
-    
-    # if cfg.viz:
-    #     cfg.dataset.sample_size_action = -1
-    # datamodule = dm(
-    #     # root=data_root,
-    #     batch_size=cfg.inference.batch_size,
-    #     val_batch_size=cfg.inference.val_batch_size,
-    #     num_workers=cfg.resources.num_workers,
-    #     dataset_cfg=cfg.dataset,
-    # )
-    # datamodule.setup(stage="predict")
-
-
     ######################################################################
     # Create the network(s) which will be evaluated (same as training).
     # You might want to put this into a "create_network" function

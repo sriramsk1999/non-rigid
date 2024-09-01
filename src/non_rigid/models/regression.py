@@ -294,3 +294,8 @@ class LinearRegressionInferenceModule(L.LightningModule):
             "cos_sim_wta": cos_sim,
             "rmse_wta": rmse,
         }
+    
+
+# consolidating linear regression modules into one
+class LinearRegressionModule(L.LightningModule):
+    pass

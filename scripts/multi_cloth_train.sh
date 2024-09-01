@@ -23,8 +23,14 @@ COMMAND=$@
 if [ $MODEL_TYPE == "scene_flow" ]; then
   echo "Training scene flow model with command: $COMMAND."
 
-  MODEL_PARAMS="model=df_base"
+  MODEL_PARAMS="model=df_base model.type=flow"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=flow dataset.scene=True dataset.world_frame=True"
+# scene point model - no object centric processing
+elif [ $MODEL_TYPE == "scene_point" ]; then
+  echo "Training scene point model with command: $COMMAND."
+
+  MODEL_PARAMS="model=df_base model.type=point"
+  DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=True dataset.world_frame=True"
 # world frame cross flow
 elif [ $MODEL_TYPE == "cross_flow_absolute" ]; then
   echo "Training absolute flow model with command: $COMMAND."

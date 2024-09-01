@@ -35,7 +35,7 @@ def expand_pcd(
             .reshape(B * num_samples, N, C)
         )
     else:
-        raise ValueError("Invalid input dimensions")
+        raise ValueError("Invalid input dimensions.")
     return points
 
 

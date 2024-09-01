@@ -11,23 +11,24 @@ import wandb
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
-from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
-from non_rigid.datasets.rigid import RigidDataModule
-from non_rigid.models.df_base import (
-    DiffusionFlowBase,
-    FlowPredictionTrainingModule,
-    PointPredictionTrainingModule,
-)
-from non_rigid.models.regression import (
-    LinearRegression,
-    LinearRegressionTrainingModule,
-)
+# from non_rigid.datasets.microwave_flow import MicrowaveFlowDataModule
+# from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
+# from non_rigid.datasets.rigid import RigidDataModule
+# from non_rigid.models.df_base import (
+#     DiffusionFlowBase,
+#     FlowPredictionTrainingModule,
+#     PointPredictionTrainingModule,
+# )
+# from non_rigid.models.regression import (
+#     LinearRegression,
+#     LinearRegressionTrainingModule,
+# )
 from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     CustomModelPlotsCallback,
     LogPredictionSamplesCallback,
     create_model,
+    create_model2,
     create_datamodule,
     match_fn,
 )
@@ -85,8 +86,7 @@ def main(cfg):
 
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
-
-    network, model = create_model(cfg)
+    network, model = create_model2(cfg)
 
 
     # datamodule.setup(stage="fit")
