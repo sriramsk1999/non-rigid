@@ -25,7 +25,8 @@ from non_rigid.models.regression import (
 )
 from non_rigid.models.tax3d import (
     DiffusionTransformerNetwork,
-    SceneDisplacementTrainingModule,
+    SceneDisplacementModule,
+    CrossDisplacementModule,
 )
 
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
@@ -79,9 +80,12 @@ def create_model(cfg):
 def create_model2(cfg):
     if cfg.model.name == "df_base":
         network_fn = DiffusionTransformerNetwork
-        module_fn = SceneDisplacementTrainingModule
+        # module_fn = SceneDisplacementTrainingModule
+        module_fn = SceneDisplacementModule
     elif cfg.model.name == "df_cross":
-        raise NotImplementedError("NEED TO IMPLEMENT DF_CROSS FOR NEW CREATE MODEL FUNCTION.")
+        network_fn = DiffusionTransformerNetwork
+        # module_fn = Tax3dModule
+        module_fn = CrossDisplacementModule
     elif cfg.model.name == "linear_regression":
         assert cfg.model.type == "point", "Only point regression is supported."
         raise NotImplementedError("NEED TO IMPLEMENT LINEAR REGRESSION FOR NEW CREATE MODEL FUNCTION.")

@@ -296,6 +296,21 @@ class LinearRegressionInferenceModule(L.LightningModule):
         }
     
 
-# consolidating linear regression modules into one
-class LinearRegressionModule(L.LightningModule):
-    pass
+# consolidating regression modules into one
+class RegressionModule(L.LightningModule):
+    def __init__(self, network, cfg) -> None:
+        super().__init__()
+        self.network = network
+        self.model_cfg = cfg.model
+        self.prediction_type = self.model_cfg.type # flow or point
+        self.mode = cfg.mode # train or eval
+
+        # prediction type-specific processing
+        if self.prediction_type == "flow":
+            self.label_key = "flow"
+        elif self.prediction_type == "point":
+            self.label_key = "pc"
+        else:
+            raise ValueError(f"Invalid prediction type: {self.prediction_type}")
+        
+        # TODO: implement the rest of this, with modified regression baseline (keep diffusion architecture, always pass t=0)

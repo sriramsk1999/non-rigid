@@ -97,8 +97,8 @@ class DiffusionTransformerNetwork(nn.Module):
         return self.dit(x, t, **kwargs)
     
 
-# TODO: do we need a separate training vs inference module? or can we combine them?
-class SceneDisplacementTrainingModule(L.LightningModule):
+
+class DenseDisplacementDiffusionModule(L.LightningModule):
     def __init__(self, network, cfg) -> None:
         super().__init__()
         self.network = network
@@ -107,16 +107,17 @@ class SceneDisplacementTrainingModule(L.LightningModule):
         self.mode = cfg.mode # train or eval
 
         # prediction type-specific processing
+        # TODO: eventually, this should be removed by updating dataset to use "point" instead of "pc"
         if self.prediction_type == "flow":
             self.label_key = "flow"
         elif self.prediction_type == "point":
             self.label_key = "pc"
         else:
             raise ValueError(f"Invalid prediction type: {self.prediction_type}")
-
+        
         # mode-specific processing
         if self.mode == "train":
-            self.run_cfg = cfg.training 
+            self.run_cfg = cfg.training
             # training-specific params
             self.lr = self.run_cfg.lr
             self.weight_decay = self.run_cfg.weight_decay
@@ -129,15 +130,7 @@ class SceneDisplacementTrainingModule(L.LightningModule):
             self.num_trials = cfg.inference.num_trials
         else:
             raise ValueError(f"Invalid mode: {self.mode}")
-
-
-        # training params
-        # self.lr = training_cfg.lr
-        # self.weight_decay = training_cfg.weight_decay
-        # self.num_training_steps = training_cfg.num_training_steps
-        # self.lr_warmup_steps = training_cfg.lr_warmup_steps
-        # self.additional_train_logging_period = training_cfg.additional_train_logging_period
-
+        
         # data params
         self.batch_size = self.run_cfg.batch_size
         self.val_batch_size = self.run_cfg.val_batch_size
@@ -168,44 +161,57 @@ class SceneDisplacementTrainingModule(L.LightningModule):
         )
         return [optimizer], [lr_scheduler]
 
+    def get_model_kwargs(self, batch, nun_samples=None):
+        """
+        Get the model kwargs for the forward pass.
+        """
+        raise NotImplementedError("This should be implemented in the derived class.")
+    
+    def get_world_preds(self, batch, num_samples, pc_action, pred_dict):
+        """
+        Get world frame predictions from the given batch and predictions.
+        """
+        raise NotImplementedError("This should be implemented in the derived class.")
+    
+    def get_viz_args(self, batch, viz_idx):
+        """
+        Get visualization arguments for wandb logging.
+        """
+        raise NotImplementedError("This should be implemented in the derived class.")
+
     def forward(self, batch, t):
         """
-        Forward pass to compute training loss.
+        Forward pass to compute diffusion training loss.
         """
-        pc_action = batch["pc_action"].permute(0, 2, 1) # channel first
         ground_truth = batch[self.label_key].permute(0, 2, 1) # channel first
-
-        model_kwargs = dict(x0=pc_action)
+        model_kwargs = self.get_model_kwargs(batch)
 
         # run diffusion
         # noise = torch.randn_like(ground_truth) * self.noise_scale
         loss_dict = self.diffusion.training_losses(
-            model=self.network, 
-            x_start=ground_truth, 
-            t=t, 
+            model=self.network,
+            x_start=ground_truth,
+            t=t,
             model_kwargs=model_kwargs,
             # noise=noise,
         )
         loss = loss_dict["loss"].mean()
         return None, loss
-    
+
     @torch.no_grad()
     def predict(self, batch, num_samples, unflatten=False, progress=True, full_prediction=True):
         """
-        Predict the output for the given input batch.
+        Compute prediction for a given batch.
 
         Args:
-            full_prediction: if True, the function will return a full dictionary containing flow and 
-                point predictions in goal and world frames (including intermediate diffusion steps). 
-                If False, the function will only return the prediction type (flow or point) in the goal 
-                frame. Set to False for training/validation.
+            batch: the input batch
+            num_samples: the number of samples to generate
+            progress: whether to show progress bar
+            full_prediction: whether to return full prediction (flow and point, goal and world frame)
         """
-        pc_action = batch["pc_action"].to(self.device)
-
-        # re-shaping and expanding for inference
-        bs, sample_size = pc_action.shape[:2]
-        pc_action = expand_pcd(pc_action, num_samples).transpose(-1, -2)
-        model_kwargs = dict(x0=pc_action)
+        # TODO: replace bs with batch_size?
+        bs, sample_size = batch["pc_action"].shape[:2]
+        model_kwargs = self.get_model_kwargs(batch, num_samples)
 
         # generating latents and running diffusion
         z = torch.randn(bs * num_samples, 3, sample_size, device=self.device)
@@ -218,22 +224,16 @@ class SceneDisplacementTrainingModule(L.LightningModule):
             progress=progress,
             device=self.device,
         )
-        # TODO: standardize all permute/transpose calls
-        # TODO: is there any reason to return model_kwargs?
-        # transform back to channel-last
         pred = pred.permute(0, 2, 1)
-        pc_action = pc_action.permute(0, 2, 1)
-
 
         if not full_prediction:
             # only return the prediction type in the goal frame
-            return {self.label_key: {"pred": pred}}
+            return {self.prediction_type: {"pred": pred}}
         else:
-            # compute goal and world frame predictions, for flows and points
-            T_goal2world = Transform3d(
-                matrix=expand_pcd(batch["T_goal2world"].to(self.device), num_samples)
-            )
+            # return full prediction (flow and point, goal and world frame)
+            pc_action = model_kwargs["x0"].permute(0, 2, 1)
 
+            # computing flow and point predictions
             if self.prediction_type == "flow":
                 pred_flow = pred
                 pred_point = pc_action + pred_flow
@@ -248,34 +248,33 @@ class SceneDisplacementTrainingModule(L.LightningModule):
                     res.permute(0, 2, 1) for res in results
                 ]
 
-            # compute world frame predictions
-            pred_point_world = T_goal2world.transform_points(pred_point)
-            pc_action_world = T_goal2world.transform_points(pc_action)
-            pred_flow_world = pred_point_world - pc_action_world
-            results_world = [
-                T_goal2world.transform_points(res) for res in results
-            ]
+            pred_dict = {
+                "flow": {
+                    "pred": pred_flow,
+                },
+                "point": {
+                    "pred": pred_point,
+                },
+                "results": results,
+            }
 
-        item = {
-            # TODO: do we ened to return model kwargs? if not, unflatten is easy
-            # "model_kwargs": ...,
-            "flow": {
-                "pred": pred_flow,
-                "pred_world": pred_flow_world,
-            },
-            "point": {
-                "pred": pred_point,
-                "pred_world": pred_point_world,
-            },
-            "results": results,
-            "results_world": results_world,
-        }
-        return item
+            # compute world frame predictions
+            pred_flow_world, pred_point_world, results_world = self.get_world_preds(
+                batch, num_samples, pc_action, pred_dict
+            )
+            pred_dict["flow"]["pred_world"] = pred_flow_world
+            pred_dict["point"]["pred_world"] = pred_point_world
+            pred_dict["results_world"] = results_world
+            return pred_dict
 
     def predict_wta(self, batch, num_samples):
         """
         Predict WTA (winner-take-all) samples, and compute WTA metrics. Unlike predict, this 
         function assumes the ground truth is available.
+
+        Args:
+            batch: the input batch
+            num_samples: the number of samples to generate
         """
         ground_truth = batch[self.label_key].to(self.device)
         seg = batch["seg"].to(self.device)
@@ -292,28 +291,57 @@ class SceneDisplacementTrainingModule(L.LightningModule):
         pred = pred_dict[self.prediction_type]["pred"]
 
         # computing error metrics
-        cos_sim = flow_cos_sim(pred, ground_truth, mask=True, seg=seg).reshape(bs, num_samples)
         rmse = flow_rmse(pred, ground_truth, mask=True, seg=seg).reshape(bs, num_samples)
         pred = pred.reshape(bs, num_samples, -1, 3)
 
         # computing winner-take-all metrics
         winner = torch.argmin(rmse, dim=-1)
-        cos_sim_wta = cos_sim[torch.arange(bs), winner]
         rmse_wta = rmse[torch.arange(bs), winner]
         pred_wta = pred[torch.arange(bs), winner]
-
-        # return # TODO: this should return a dict
-
         return {
             "pred": pred,
             "pred_wta": pred_wta,
-            "cos_sim": cos_sim,
-            "cos_sim_wta": cos_sim_wta,
             "rmse": rmse,
             "rmse_wta": rmse_wta,
         }
-        
+
+    def log_viz_to_wandb(self, batch, pred_wta_dict, tag):
+        """
+        Log visualizations to wandb.
+
+        Args:
+            batch: the input batch
+            pred_wta_dict: the prediction dictionary
+            tag: the tag to use for logging
+        """
+        # pick a random sample in the batch to visualize
+        viz_idx = np.random.randint(0, batch["pc"].shape[0])
+        pred_viz = pred_wta_dict["pred"][viz_idx, 0, :, :3]
+        pred_wta_viz = pred_wta_dict["pred_wta"][viz_idx, :, :3]
+        viz_args = self.get_viz_args(batch, viz_idx)
+
+        # getting predicted action point cloud
+        if self.prediction_type == "flow":
+            pred_action_viz = viz_args["pc_action_viz"] + pred_viz
+            pred_action_wta_viz = viz_args["pc_action_viz"] + pred_wta_viz
+        elif self.prediction_type == "point":
+            pred_action_viz = pred_viz
+            pred_action_wta_viz = pred_wta_viz
+
+        # logging predicted vs ground truth point cloud
+        viz_args["pred_action_viz"] = pred_action_viz
+        predicted_vs_gt = viz_predicted_vs_gt(**viz_args)
+        wandb.log({f"{tag}/predicted_vs_gt": predicted_vs_gt})
+
+        # logging predicted vs ground truth point cloud (wta)
+        viz_args["pred_action_viz"] = pred_action_wta_viz
+        predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
+        wandb.log({f"{tag}/predicted_vs_gt_wta": predicted_vs_gt_wta})
+
     def training_step(self, batch):
+        """
+        Training step for the module. Logs training metrics and visualizations to wandb.
+        """
         self.train()
         t = torch.randint(
             0, self.diff_steps, (self.batch_size,), device=self.device
@@ -337,81 +365,42 @@ class SceneDisplacementTrainingModule(L.LightningModule):
         if do_additional_logging:
             # winner-take-all predictions
             pred_wta_dict = self.predict_wta(batch, self.num_wta_trials)
-            pred = pred_wta_dict["pred"]
-            pred_wta = pred_wta_dict["pred_wta"]
-            cos_sim = pred_wta_dict["cos_sim"]
-            cos_sim_wta = pred_wta_dict["cos_sim_wta"]
-            rmse = pred_wta_dict["rmse"]
-            rmse_wta = pred_wta_dict["rmse_wta"]
 
             ####################################################
             # logging training wta metrics
             ####################################################
             self.log_dict(
                 {
-                    "train/cos_sim": cos_sim.mean(),
-                    "train/cos_sim_wta": cos_sim_wta.mean(),
-                    "train/rmse": rmse.mean(),
-                    "train/rmse_wta": rmse_wta.mean(),
+                    "train/rmse": pred_wta_dict["rmse"].mean(),
+                    "train/rmse_wta": pred_wta_dict["rmse_wta"].mean(),
                 },
                 add_dataloader_idx=False,
                 prog_bar=True,
             )
 
-
             ####################################################
             # logging visualizations
             ####################################################
-            viz_idx = np.random.randint(0, batch["pc"].shape[0])
-            pc_pos_viz = batch["pc"][viz_idx, :, :3]
-            pc_action_viz = batch["pc_action"][viz_idx, :, :3]
-            pred_viz = pred[viz_idx, 0, :, :3]
-            pred_wta_viz = pred_wta[viz_idx, :, :3]
-            viz_args = {
-                "pc_pos_viz": pc_pos_viz,
-                "pc_action_viz": pc_action_viz,
-            }
+            self.log_viz_to_wandb(batch, pred_wta_dict, "train")
 
-            if self.prediction_type == "flow":
-                pred_action_viz = pc_action_viz + pred_viz
-                pred_action_wta_viz = pc_action_viz + pred_wta_viz
-            elif self.prediction_type == "point":
-                pred_action_viz = pred_viz
-                pred_action_wta_viz = pred_wta_viz
-
-            # logging predicted vs ground truth point cloud
-            viz_args["pred_action_viz"] = pred_action_viz
-            predicted_vs_gt = viz_predicted_vs_gt(**viz_args)
-            wandb.log({"train/predicted_vs_gt": predicted_vs_gt})
-
-            # logging predicted vs ground truth point cloud (wta)
-            viz_args["pred_action_viz"] = pred_action_wta_viz
-            predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
-            wandb.log({"train/predicted_vs_gt_wta": predicted_vs_gt_wta})
-        
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        """
+        Validation step for the module. Logs validation metrics and visualizations to wandb.
+        """
         self.eval()
         with torch.no_grad():
             # winner-take-all predictions
             pred_wta_dict = self.predict_wta(batch, self.num_wta_trials)
-            pred = pred_wta_dict["pred"]
-            pred_wta = pred_wta_dict["pred_wta"]
-            cos_sim = pred_wta_dict["cos_sim"]
-            cos_sim_wta = pred_wta_dict["cos_sim_wta"]
-            rmse = pred_wta_dict["rmse"]
-            rmse_wta = pred_wta_dict["rmse_wta"]
-
+        
         ####################################################
         # logging validation wta metrics
         ####################################################
         self.log_dict(
             {
-                f"val_cos_sim_{dataloader_idx}": cos_sim.mean(),
-                f"val_wta_cos_sim_{dataloader_idx}": cos_sim_wta.mean(),
-                f"val_rmse_{dataloader_idx}": rmse.mean(),
-                f"val_wta_rmse_{dataloader_idx}": rmse_wta.mean(),
+                f"val_rmse_{dataloader_idx}": pred_wta_dict["rmse"].mean(),
+                f"val_rmse_wta_{dataloader_idx}": pred_wta_dict["rmse_wta"].mean(),
             },
             add_dataloader_idx=False,
             prog_bar=True,
@@ -420,42 +409,115 @@ class SceneDisplacementTrainingModule(L.LightningModule):
         ####################################################
         # logging visualizations
         ####################################################
-        viz_idx = np.random.randint(0, batch["pc"].shape[0])
+        self.log_viz_to_wandb(batch, pred_wta_dict, f"val_{dataloader_idx}")
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        """
+        Prediction step for model evaluation. Computes winner-take-all metrics.
+        """
+        # winner-take-all predictions
+        pred_wta_dict = self.predict_wta(batch, self.num_wta_trials)
+        return {
+            "rmse": pred_wta_dict["rmse"],
+            "rmse_wta": pred_wta_dict["rmse_wta"],
+        }
+    
+
+
+class SceneDisplacementModule(DenseDisplacementDiffusionModule):
+    """
+    Scene-level DDD module. Applies self-attention to the entire scene.
+    """
+    def __init__(self, network, cfg) -> None:
+        super().__init__(network, cfg)
+
+    def get_model_kwargs(self, batch, num_samples=None):
+        pc_action = batch["pc_action"]
+        if num_samples is not None:
+            # expand point clouds if num_samples is provided; used for WTA predictions
+            pc_action = expand_pcd(pc_action, num_samples)
+
+        pc_action = pc_action.permute(0, 2, 1) # channel first
+        model_kwargs = dict(x0=pc_action)
+        return model_kwargs
+    
+    def get_world_preds(self, batch, num_samples, pc_action, pred_dict):
+        """
+        Get world-frame predictions from the given batch and predictions.
+        """
+        T_goal2world = Transform3d(
+            matrix=expand_pcd(batch["T_goal2world"].to(self.device), num_samples)
+        )
+
+        pred_point_world = T_goal2world.transform_points(pred_dict["point"]["pred"])
+        pc_action_world = T_goal2world.transform_points(pc_action)
+        pred_flow_world = pred_point_world - pc_action_world
+        results_world = [
+            T_goal2world.transform_points(res) for res in pred_dict["results"]
+        ]
+        return pred_flow_world, pred_point_world, results_world
+    
+    def get_viz_args(self, batch, viz_idx):
+        """
+        Get visualization arguments for wandb logging.
+        """
         pc_pos_viz = batch["pc"][viz_idx, :, :3]
         pc_action_viz = batch["pc_action"][viz_idx, :, :3]
-        pred_viz = pred[viz_idx, 0, :, :3]
-        pred_wta_viz = pred_wta[viz_idx, :, :3]
         viz_args = {
             "pc_pos_viz": pc_pos_viz,
             "pc_action_viz": pc_action_viz,
         }
+        return viz_args
 
-        if self.prediction_type == "flow":
-            pred_action_viz = pc_action_viz + pred_viz
-            pred_action_wta_viz = pc_action_viz + pred_wta_viz
-        elif self.prediction_type == "point":
-            pred_action_viz = pred_viz
-            pred_action_wta_viz = pred_wta_viz
+class CrossDisplacementModule(DenseDisplacementDiffusionModule):
+    """
+    Object-centric DDD module. Applies cross attention between action and anchor objects.
+    """
+    def __init__(self, network, cfg) -> None:
+        super().__init__(network, cfg)
 
-        # logging predicted vs ground truth point cloud
-        viz_args["pred_action_viz"] = pred_action_viz
-        predicted_vs_gt = viz_predicted_vs_gt(**viz_args)
-        wandb.log({f"val/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt})
+    def get_model_kwargs(self, batch, num_samples=None):
+        pc_action = batch["pc_action"]
+        pc_anchor = batch["pc_anchor"]
+        if num_samples is not None:
+            # expand point clouds if num_samples is provided; used for WTA predictions
+            pc_action = expand_pcd(pc_action, num_samples)
+            pc_anchor = expand_pcd(pc_anchor, num_samples)
+        
+        pc_action = pc_action.permute(0, 2, 1) # channel first
+        pc_anchor = pc_anchor.permute(0, 2, 1) # channel first
+        model_kwargs = dict(x0=pc_action, y=pc_anchor)
+        return model_kwargs
+    
+    def get_world_preds(self, batch, num_samples, pc_action, pred_dict):
+        """
+        Get world-frame predictions from the given batch and predictions.
+        """
+        T_action2world = Transform3d(
+            matrix=expand_pcd(batch["T_action2world"].to(self.device), num_samples)
+        )
+        T_goal2world = Transform3d(
+            matrix=expand_pcd(batch["T_goal2world"].to(self.device), num_samples)
+        )
 
-        # logging predicted vs ground truth point cloud (wta)
-        viz_args["pred_action_viz"] = pred_action_wta_viz
-        predicted_vs_gt_wta = viz_predicted_vs_gt(**viz_args)
-        wandb.log({f"val_wta/predicted_vs_gt_{dataloader_idx}": predicted_vs_gt_wta})
+        pred_point_world = T_goal2world.transform_points(pred_dict["point"]["pred"])
+        pc_action_world = T_action2world.transform_points(pc_action)
+        pred_flow_world = pred_point_world - pc_action_world
+        results_world = [
+            T_goal2world.transform_points(res) for res in pred_dict["results"]
+        ]
+        return pred_flow_world, pred_point_world, results_world
 
-    def predict_step(self, batch):
-        # winner-take-all predictions
-        pred_wta_dict = self.predict_wta(batch, self.num_wta_trials)
-        return {
-            "cos_sim": pred_wta_dict["cos_sim"],
-            "cos_sim_wta": pred_wta_dict["cos_sim_wta"],
-            "rmse": pred_wta_dict["rmse"],
-            "rmse_wta": pred_wta_dict["rmse_wta"],
+    def get_viz_args(self, batch, viz_idx):
+        """
+        Get visualization arguments for wandb logging.
+        """
+        pc_pos_viz = batch["pc"][viz_idx, :, :3]
+        pc_action_viz = batch["pc_action"][viz_idx, :, :3]
+        pc_anchor_viz = batch["pc_anchor"][viz_idx, :, :3]
+        viz_args = {
+            "pc_pos_viz": pc_pos_viz,
+            "pc_action_viz": pc_action_viz,
+            "pc_anchor_viz": pc_anchor_viz,
         }
-
-class Tax3dTrainingModule(L.LightningModule):
-    pass
+        return viz_args

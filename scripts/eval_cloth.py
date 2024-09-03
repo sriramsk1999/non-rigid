@@ -29,6 +29,7 @@ from non_rigid.utils.script_utils import (
     PROJECT_ROOT,
     LogPredictionSamplesCallback,
     create_model,
+    create_model2,
     create_datamodule,
     match_fn,
     flatten_outputs
@@ -108,7 +109,7 @@ def main(cfg):
 
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
-    network, model = create_model(cfg)
+    network, model = create_model2(cfg)
 
 
     # get checkpoint file (for now, this does not log a run)
@@ -247,12 +248,13 @@ def main(cfg):
             )
 
             # Compute the metrics.
-            cos_sim = torch.mean(outputs["cos_sim"])
+            # cos_sim = torch.mean(outputs["cos_sim"])
             rmse = torch.mean(outputs["rmse"])
-            cos_sim_wta = torch.mean(outputs["cos_sim_wta"])
+            # cos_sim_wta = torch.mean(outputs["cos_sim_wta"])
             rmse_wta = torch.mean(outputs["rmse_wta"])
-            print(f"{name} cos sim: {cos_sim}, rmse: {rmse}")
-            print(f"{name} cos sim wta: {cos_sim_wta}, rmse wta: {rmse_wta}")
+            # print(f"{name} cos sim: {cos_sim}, rmse: {rmse}")
+            # print(f"{name} cos sim wta: {cos_sim_wta}, rmse wta: {rmse_wta}")
+            print(f"{name} rmse: {rmse}, rmse wta: {rmse_wta}")
         fig.show()
         fig_wta.show()
 
