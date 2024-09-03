@@ -404,4 +404,3 @@ dependencies:
       - wrapt==1.15.0
       - yarl==1.9.3
       - zarr==2.18.2
-prefix: /home/eycai/anaconda3/envs/nrp_2
