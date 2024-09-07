@@ -5,6 +5,10 @@ import plotly.graph_objects as go
 import rpad.visualize_3d.primitives as rvpr
 import torch
 
+import matplotlib.pyplot as plt
+from matplotlib import rcParams
+from PIL import Image
+
 class FlowNetAnimation:
     def __init__(self):
         self.num_frames = 0
@@ -253,3 +257,76 @@ def plot_multi_np(plist):
     fig = go.Figure(data=go_data, layout=layout)
     fig.show()
     return fig
+
+
+
+CAM_PROJECTION = (1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, -1.0000200271606445, -1.0,
+                    0.0, 0.0, -0.02000020071864128, 0.0)
+CAM_VIEW = (0.9396926164627075, 0.14454397559165955, -0.3099755346775055, 0.0, 
+            -0.342020183801651, 0.3971312642097473, -0.8516507148742676, 0.0, 
+            7.450580596923828e-09, 0.9063077569007874, 0.4226182699203491, 0.0, 
+            0.5810889005661011, -4.983892917633057, -22.852874755859375, 1.0)
+
+CAM_WIDTH = 500
+CAM_HEIGHT = 500
+
+def camera_project(point,
+                   projectionMatrix=CAM_PROJECTION,
+                   viewMatrix=CAM_VIEW,
+                   height=CAM_HEIGHT,
+                   width=CAM_WIDTH):
+    """
+    Projects a world point in homogeneous coordinates to pixel coordinates
+    Args
+        point: np.array of shape (N, 3); indicates the desired point to project
+    Output
+        (x, y): np.array of shape (N, 2); pixel coordinates of the projected point
+    """
+    point = np.concatenate([point, np.ones_like(point[:, :1])], axis=-1) # N x 4
+
+    # reshape to get homogeneus transform
+    persp_m = np.array(projectionMatrix).reshape((4, 4)).T
+    view_m = np.array(viewMatrix).reshape((4, 4)).T
+
+    # Perspective proj matrix
+    world_pix_tran = persp_m @ view_m @ point.T
+    world_pix_tran = world_pix_tran / world_pix_tran[-1]  # divide by w
+    world_pix_tran[:3] = (world_pix_tran[:3] + 1) / 2
+    x, y = world_pix_tran[0] * width, (1 - world_pix_tran[1]) * height
+    x, y = np.floor(x).astype(int), np.floor(y).astype(int)
+
+    return np.stack([x, y], axis=1)
+
+def plot_diffusion(img, results, viewmat, color_key):
+    # https://stackoverflow.com/questions/34768717/matplotlib-unable-to-save-image-in-same-resolution-as-original-image
+    diffusion_frames = []
+
+    for res in results:
+        res_cam = camera_project(res, viewMatrix=viewmat)
+
+        dpi = rcParams['figure.dpi']
+        img = np.array(img)
+        height, width, _ = img.shape
+        figsize = width / dpi, height / dpi
+
+        # creating figure of exact image size
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.axis('off')
+        ax.imshow(img)
+
+        # clipping points that are outside of camera frame
+        filter = (res_cam[:, 0] >= 0) & (res_cam[:, 0] < height) & (res_cam[:, 1] >= 0) & (res_cam[:, 1] < width)
+        res_cam = res_cam[filter]
+        color_key_cam = color_key[filter]
+
+        # plotting points
+        ax.scatter(res_cam[:, 0], res_cam[:, 1], cmap="inferno", 
+                   c=color_key_cam, s=5, marker='o')
+        fig.canvas.draw()
+        frame = Image.frombytes('RGB', fig.canvas.get_width_height(), fig.canvas.tostring_rgb())
+        plt.close(fig)
+        diffusion_frames.append(frame)
+    return diffusion_frames

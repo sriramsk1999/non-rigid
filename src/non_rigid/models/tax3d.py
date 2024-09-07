@@ -99,6 +99,11 @@ class DiffusionTransformerNetwork(nn.Module):
 
 
 class DenseDisplacementDiffusionModule(L.LightningModule):
+    """
+    Generalized Dense Displacement Diffusion (DDD) module that handles model training, inference, 
+    evaluation, and visualization. This module is inherited and overriden by scene-level and 
+    object-centric modules.
+    """
     def __init__(self, network, cfg) -> None:
         super().__init__()
         self.network = network
@@ -127,7 +132,7 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
         elif self.mode == "eval":
             self.run_cfg = cfg.inference
             # inference-specific params
-            self.num_trials = cfg.inference.num_trials
+            self.num_trials = self.run_cfg.num_trials
         else:
             raise ValueError(f"Invalid mode: {self.mode}")
         
@@ -285,6 +290,7 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
         seg = expand_pcd(seg, num_samples)
 
         # generating diffusion predictions
+        # TODO: this should probably specific full_prediction=False
         pred_dict = self.predict(
             batch, num_samples, unflatten=False, progress=True
         )

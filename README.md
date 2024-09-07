@@ -22,6 +22,20 @@ For now, the easiest thing to do is to install ``non-rigid`` in editable mode.
 pip install -e .
 ```
 
+# Training Models #
+To train a model, run:
+```
+./multi_cloth_train.sh [GPU_INDEX] [MODEL_TYPE] [WANDB_MODE]
+```
+For example, to train a TAX3D-CD model and log results to WandB, run:
+```
+./multi_cloth_train.sh 0 cross_flow_relative online
+```
+Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
+```
+./multi_cloth_train.sh 0 cross_flow_relative online dataset.data_dir=[PATH_TO_YOUR_DATASET]
+```
+
 # Running Evaluations #
 To get coverage metrics, run:
 ```
@@ -31,4 +45,7 @@ For example:
 ```
 ./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True
 ```
-Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored.
+Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
+```
+./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True dataset.data_dir=[PATH_TO_YOUR_DATASET]
+```

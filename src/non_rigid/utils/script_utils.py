@@ -22,6 +22,8 @@ from non_rigid.models.regression import (
     LinearRegression,
     LinearRegressionInferenceModule,
     LinearRegressionTrainingModule,
+    RegressionNetwork,
+    RegressionModule,
 )
 from non_rigid.models.tax3d import (
     DiffusionTransformerNetwork,
@@ -86,10 +88,10 @@ def create_model2(cfg):
         network_fn = DiffusionTransformerNetwork
         # module_fn = Tax3dModule
         module_fn = CrossDisplacementModule
-    elif cfg.model.name == "linear_regression":
-        assert cfg.model.type == "point", "Only point regression is supported."
-        raise NotImplementedError("NEED TO IMPLEMENT LINEAR REGRESSION FOR NEW CREATE MODEL FUNCTION.")
-    
+    elif cfg.model.name == "regression":
+        network_fn = RegressionNetwork
+        module_fn = RegressionModule
+
     # create network and model
     network = network_fn(model_cfg=cfg.model)
     model = module_fn(network=network, cfg=cfg)

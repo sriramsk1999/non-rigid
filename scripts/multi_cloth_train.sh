@@ -55,11 +55,17 @@ elif [ $MODEL_TYPE == "cross_point_relative" ]; then
 
   MODEL_PARAMS="model=df_cross model.type=point"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
-# linear regression baseline
-elif [ $MODEL_TYPE == "linear" ]; then
-  echo "Training linear regression model with command: $COMMAND."
+# flow regression baseline
+elif [ $MODEL_TYPE == "regression_flow" ]; then
+  echo "Training flow regression model with command: $COMMAND."
 
-  MODEL_PARAMS="model=linear model.type=point"
+  MODEL_PARAMS="model=regression model.type=flow"
+  DATASET_PARAMS="dataset=proc_cloth dataset.type=flow dataset.scene=False dataset.world_frame=False"
+# point regression baseline
+elif [ $MODEL_TYPE == "regression_point" ]; then
+  echo "Training point regression model with command: $COMMAND."
+
+  MODEL_PARAMS="model=regression model.type=point"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
 else
   echo "Invalid model type."
