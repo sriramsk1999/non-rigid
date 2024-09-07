@@ -1,0 +1,39 @@
+defaults:
+  - task: adroit_hammer
+
+name: tax3d
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "debug"
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+
+logging:
+  entity: r-pad
+  group: ???
+  id: null
+  mode: disabled
+  name: ${training.seed}
+  project: non_rigid
+  resume: true
+  tags:
+  - dp3
+
+checkpoint:
+  save_ckpt: False # if True, save checkpoint every checkpoint_every
+  artifact_dir: data/wandb_artifacts
+
+inference:
+  batch_size: 16
+  val_batch_size: 4
+  sample_size: None # Set by the training loop, from dataset config.
+  sample_size_anchor: None # Set by the training loop, from dataset config.
+  num_wta_trials: 20
+  num_trials: 1
+
+  action_full: True
