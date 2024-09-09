@@ -739,6 +739,7 @@ class EvalTAX3DWorkspace:
         output_dir = self._output_dir
         if output_dir is None:
             output_dir = HydraConfig.get().runtime.output_dir
+        output_dir = os.path.expanduser(output_dir)
         return output_dir
 
 
