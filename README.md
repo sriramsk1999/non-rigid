@@ -4,33 +4,40 @@ This repository can be conveniently installed as a Python package, and used in d
 
 ## Create conda environment and install dependencies ##
 
-Before installing ``non-rigid``, create a conda environment with the required dependences in ``environment.yml``:
-
+For now, all of the up-to-date TAX3D code is in the ``articulated`` branch.
 ```
 git clone https://github.com/ey-cai/non-rigid.git
-git checkout articulated
 cd non-rigid
-conda create --name ENVNAME python=3.9
+git checkout articulated
+conda create --name ENVNAME python=3.9 pip==23.3.1 setuptools==65.5
 ```
-This is optional, but you may want to replace the ``name`` parameter in ``environment.yml`` with whatever you choose for ``ENVNAME`` for clarity.
+Before installing ``non-rigid``, you'll need to install versions of PyTorch, PyTorch Geometric, and PyTorch3D. We've provided specific GPU versions in ``requirements-gpu.txt``:
+```
+pip install -r requirements-gpu.txt
+```
+
+## Install DEDO and 3D Diffusion Policy ##
+
+```
+cd third_party/dedo
+pip install -e .
+cd ../..
+
+cd third_party/3D-Diffusion-Policy/3D-Diffusion-Policy
+pip install -e .
+cd ../../..
+```
+Note: the TAX3D repo contains significant changes to the underlying code in both the DEDO and 3D Diffusion Policy repository (refer to the READMEs in the respective ``third_party/`` directories, will update in the future).
+
 
 ## Install ``non-rigid`` ##
 
-For now, the easiest thing to do is to install ``non-rigid`` in editable mode.
+For now, the easiest thing to do is to install ``non-rigid`` in editable mode. This should install all of the additional required dependencies, as listed in ``pyproject.toml``.
 
 ```
 pip install -e .
 ```
-
-## Install 3D Diffusion Policy ##
-
-```
-cd third_party/3D-Diffusion-Policy/3D-Diffusion-Policy
-pip install -e .
-pip install zarr==2.12.0 dm_control dill==0.3.5.1 einops==0.4.1 numba==0.56.4 gym==0.21.0
-ALSO INSTALL VISAULIZER
-```
-TODO: Move these to the pyproject.toml file
+And you're done!
 
 # Training Models #
 To train a model, run:
@@ -59,3 +66,6 @@ Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/pro
 ```
 ./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True dataset.data_dir=[PATH_TO_YOUR_DATASET]
 ```
+
+# Running Policy Evaluations #
+TODO

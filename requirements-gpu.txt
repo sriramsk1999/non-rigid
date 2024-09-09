@@ -6,6 +6,9 @@ wheel==0.38.0
 fvcore==0.1.5.post20221221
 iopath==0.1.9
 
+# Lightning install overwrites the torch version, so we need to install it first.
+lightning==2.0.3
+
 # Torch.
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch==2.0.1+cu118
