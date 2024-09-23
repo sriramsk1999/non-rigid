@@ -59,7 +59,7 @@ def DiT_PointCloud_xS(use_rotary, **kwargs):
     hidden_size = 132 if use_rotary else 128
     return DiT_PointCloud(depth=5, hidden_size=hidden_size, num_heads=4, **kwargs)
 
-
+# TODO: clean up all unused functions
 DiT_models = {
     "DiT_pcu_S": DiT_pcu_S,
     "DiT_pcu_xS": DiT_pcu_xS,

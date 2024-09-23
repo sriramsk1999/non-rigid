@@ -121,8 +121,8 @@ def command_anchor_position(sim, anchor_bullet_id, tgt_pos, tax3d=False, task='p
     if tax3d:
         # for tax3d models, bias towards target position
         if task == 'proccloth':
-            # raw_force = 35.0 * vel_diff + CTRL_PD_KD_POS * pos_diff
-            raw_force = CTRL_PD_KD * vel_diff + CTRL_PD_KD_POS * pos_diff
+            raw_force = 35.0 * vel_diff + CTRL_PD_KD_POS * pos_diff
+            # raw_force = CTRL_PD_KD * vel_diff + CTRL_PD_KD_POS * pos_diff
         elif task == 'hangbag':
             pos_diff_mag = np.linalg.norm(pos_diff)
             if pos_diff_mag > 0.5:

@@ -3,7 +3,7 @@ import numpy as np
 from pytorch3d.transforms import Transform3d, Translate
 
 from non_rigid.models.df_base import DiffusionFlowBase, FlowPredictionInferenceModule, PointPredictionInferenceModule
-from non_rigid.utils.script_utils import create_model2
+from non_rigid.utils.script_utils import create_model
 
 from diffusion_policy_3d.policy.base_policy import BasePolicy
 
@@ -29,7 +29,7 @@ class TAX3D(BasePolicy):
         self.run_cfg.mode = "eval"
         self.run_cfg.inference = self.eval_cfg.inference
 
-        network, model = create_model2(self.run_cfg)
+        network, model = create_model(self.run_cfg)
         self.network = network
         self.model = model
 

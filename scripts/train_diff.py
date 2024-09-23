@@ -28,7 +28,6 @@ from non_rigid.utils.script_utils import (
     CustomModelPlotsCallback,
     LogPredictionSamplesCallback,
     create_model,
-    create_model2,
     create_datamodule,
     match_fn,
 )
@@ -86,7 +85,7 @@ def main(cfg):
 
     # Model architecture is dataset-dependent, so we have a helper
     # function to create the model (while separating out relevant vals).
-    network, model = create_model2(cfg)
+    network, model = create_model(cfg)
 
 
     # datamodule.setup(stage="fit")

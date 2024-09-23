@@ -47,14 +47,14 @@ def gen_procedural_hang_cloth(args, preset_obj_name, deform_info_dict, deform_pa
         w = deform_params['w']
     else:
         # w = np.random.uniform(0.5, 2.0) / 2
-        w = np.random.uniform(1.0, 2.0) / 2
+        w = np.random.uniform(1.6, 2.4) / 2
         deform_params['w'] = w
     
     if 'h' in deform_params:
         h = deform_params['h']
     else:
         # h = np.random.uniform(0.5, 2.0) / 2
-        h = np.random.uniform(1.0, 2.0) / 2
+        h = np.random.uniform(1.6, 2.4) / 2
         deform_params['h'] = h
 
     if 'holes' in deform_params:

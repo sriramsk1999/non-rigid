@@ -364,6 +364,7 @@ class DeformablePlacementDataset(data.Dataset):
         self.split = split
         self.dataset_dir = self.root / self.split
         self.num_demos = int(len(os.listdir(self.dataset_dir)))
+        print(self.num_demos)
         self.dataset_cfg = dataset_cfg
 
         # determining dataset size - if not specified, use all demos in directory once

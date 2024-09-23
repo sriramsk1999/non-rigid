@@ -37,7 +37,7 @@ from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
 PROJECT_ROOT = str(pathlib.Path(__file__).parent.parent.parent.parent.resolve())
 
     
-def create_model(cfg):
+def create_model_legacy(cfg):
     if cfg.model.name in ["df_base", "df_cross"]:
         network_fn = DiffusionFlowBase
         if cfg.mode == "train":
@@ -79,7 +79,7 @@ def create_model(cfg):
     return network, model
 
 
-def create_model2(cfg):
+def create_model(cfg):
     if cfg.model.name == "df_base":
         network_fn = DiffusionTransformerNetwork
         # module_fn = SceneDisplacementTrainingModule

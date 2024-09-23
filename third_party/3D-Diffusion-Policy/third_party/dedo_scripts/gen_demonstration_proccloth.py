@@ -30,12 +30,15 @@ def parse_args():
     parser.add_argument('--random_anchor_geometry', action='store_true', help='randomize anchor geometry')
     parser.add_argument('--random_anchor_pose', action='store_true', help='randomize anchor pose')
     parser.add_argument('--cloth_hole', type=str, default='single', help='number of holes in cloth')
+    parser.add_argument('--tag', type=str, default='', help='additional tag for dataset description')
     # Args for demo generation.
     parser.add_argument('--vid_speed', type=int, default=3, help='speed of rollout video')
-    parser.add_argument('--save_demos', action='store_true', help='generate DEDO demos')
-    parser.add_argument('--save_tax3d', action='store_true', help='save TAX3D demos')
-    parser.add_argument('--save_rollout_vids', action='store_true', help='save rollout videos')
+    #parser.add_argument('--save_demos', action='store_true', help='generate DEDO demos')
+    #parser.add_argument('--save_tax3d', action='store_true', help='save TAX3D demos')
+    #parser.add_argument('--save_rollout_vids', action='store_true', help='save rollout videos')
     args, _ = parser.parse_known_args()
+    # TODO: maybe add task as an argument, so that all the demonstration generation can be consolidated into one script
+
     return args
 
 def downsample_with_fps(points: np.ndarray, num_points: int = 512):
@@ -61,79 +64,66 @@ if __name__ == '__main__':
     split = args.split
     vid_speed = args.vid_speed
 
-    save_demos = args.save_demos
-    save_tax3d = args.save_tax3d
-    save_rollout_vids = args.save_rollout_vids
+    #save_demos = args.save_demos
+    #save_tax3d = args.save_tax3d
+    #save_rollout_vids = args.save_rollout_vids
 
     random_cloth_geometry = args.random_cloth_geometry
     random_cloth_pose = args.random_cloth_pose
     random_anchor_geometry = args.random_anchor_geometry
     random_anchor_pose = args.random_anchor_pose
     cloth_hole = args.cloth_hole
+    tag = args.tag
 
     if cloth_hole not in ['single', 'double']:
         raise ValueError(f'Invalid cloth hole configuration: {cloth_hole}')
 
 
     ##############################################
-    # Creating experiment name and save directory
+    # Creating experiment name and directories
     ##############################################
     cloth_geometry = 'multi' if random_cloth_geometry else 'single'
     cloth_pose = 'random' if random_cloth_pose else 'fixed'
     anchor_geometry = 'multi' if random_anchor_geometry else 'single'
     anchor_pose = 'random' if random_anchor_pose else 'fixed'
-
+    # experiment name
     exp_name_dir = (
         f'cloth={cloth_geometry}-{cloth_pose} ' + \
         f'anchor={anchor_geometry}-{anchor_pose} ' + \
-        f'hole={cloth_hole}'
+        f'hole={cloth_hole}{tag}'
     )
-    # TODO: get rid of the env_name arg
-    
-    # save_dir = os.path.join(args.root_dir, 'dedo_'+args.env_name+'_'+anchor_config+'_expert_'+split+'.zarr')
-    # tax3d_save_dir = os.path.join(args.root_dir, 'tax3d/multi_cloth_1/'+split+'_1/')
 
+    # creating directories
     args.root_dir = os.path.expanduser(args.root_dir)
     save_dir = os.path.join(args.root_dir, exp_name_dir, f'{split}.zarr')
     tax3d_save_dir = os.path.join(args.root_dir, exp_name_dir, f'{split}_tax3d/')
     rollout_vids_save_dir = os.path.join(args.root_dir, exp_name_dir, f'{split}_rollout_vids/')
-    # TODO: eventually, this demo generation should be more general; handle unified experiment names, and train/val/val_ood splits
-
-
-    # creating directory for rollouts
-    if save_demos:
-        if os.path.exists(save_dir):
-            cprint('Data already exists at {}'.format(save_dir), 'red')
-            cprint("If you want to overwrite, delete the existing directory first.", "red")
-            cprint("Do you want to overwrite? (y/n)", "red")
-            user_input = input()
-            if user_input == 'y':
-                cprint('Overwriting {}'.format(save_dir), 'red')
-                os.system('rm -rf {}'.format(save_dir))
-            else:
-                cprint('Exiting', 'red')
-                exit(0)
-        os.makedirs(save_dir, exist_ok=True)
-
-    # creating directory for tax3d data
-    if save_tax3d:
-        os.makedirs(tax3d_save_dir, exist_ok=True)
-
-    # creating directory for rollout videos
-    if save_rollout_vids:
-        os.makedirs(rollout_vids_save_dir, exist_ok=True)
+    if os.path.exists(save_dir):
+        cprint('Data already exists at {}'.format(save_dir), 'red')
+        cprint("If you want to overwrite, delete the existing directory first.", "red")
+        cprint("Do you want to overwrite? (y/n)", "red")
+        user_input = input()
+        if user_input == 'y':
+            cprint('Overwriting {}'.format(save_dir), 'red')
+            os.system('rm -rf {}'.format(save_dir))
+        else:
+            cprint('Exiting', 'red')
+            exit(0)
+    os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(tax3d_save_dir, exist_ok=True)
+    os.makedirs(rollout_vids_save_dir, exist_ok=True)
 
     ###############################
     # parse DEDO demo args and create DEDO env
     ###############################
     dedo_args = get_args()
     dedo_args.env = 'HangProcCloth-v0'
-    # dedo_args.env = 'HangBag-v0'
     dedo_args.tax3d = True
     dedo_args.rollout_vid = True
     dedo_args.pcd = True
     dedo_args.logdir = 'rendered'
     dedo_args.cam_config_path = '/home/eycai/Documents/dedo/dedo/utils/cam_configs/camview_0.json'
+    dedo_args.viz = True
     args_postprocess(dedo_args)
 
     # TODO: based on env name, there should be some logic here handling resetting of the environment
@@ -185,8 +175,8 @@ if __name__ == '__main__':
                 deform_params = {
                     'num_holes': num_holes,
                     'node_density': 25,
-                    'w': 1.0,
-                    'h': 1.0,
+                    #'w': 1.0,
+                    #'h': 1.0,
                 }
             else:
                 if num_holes == 1:
@@ -231,126 +221,143 @@ if __name__ == '__main__':
             else:
                 raise ValueError("Only generating datasets for random anchor poses")
 
+            action_pcd_arrays_sub_list = []
+            anchor_pcd_arrays_sub_list = []
+            state_arrays_sub_list = []
+            action_arrays_sub_list = []
 
+            total_count_sub_list = []
+            success_sub_list = []
+            reward_sum_list = []
 
-            obs = env.reset(
-                rigid_rot=rigid_rot,
-                rigid_trans=rigid_trans,
-                # rigid_rot=None,
-                # rigid_trans=None,
-                deform_params=deform_params,
-                anchor_params=anchor_params,
-            )
+            tax3d_demo_list = []
+            rollout_vid_list = []
 
-            # initializing tax3d demo
-            tax3d_demo = {
-                'action_pc': obs['action_pcd'],
-                'action_seg': np.ones(obs['action_pcd'].shape[0]),
-                'anchor_pc': obs['anchor_pcd'],
-                'anchor_seg': np.ones(obs['anchor_pcd'].shape[0]),
-                'speed_factor': 1.0, # this is legacy?
-                'rot': rigid_rot,
-                'trans': rigid_trans,
-                'deform_params': deform_params,
-                'anchors': env.anchors, # this is legacy?
-            }
+            for hole in range(num_holes):
+                # reset the environment
+                obs = env.reset(
+                    rigid_rot=rigid_rot,
+                    rigid_trans=rigid_trans,
+                    deform_params=deform_params,
+                    anchor_params=anchor_params,
+                )
 
+                # initializing tax3d demo
+                tax3d_demo = {
+                    'action_pc': obs['action_pcd'],
+                    'action_seg': np.ones(obs['action_pcd'].shape[0]),
+                    'anchor_pc': obs['anchor_pcd'],
+                    'anchor_seg': np.ones(obs['anchor_pcd'].shape[0]),
+                    'speed_factor': 1.0, # this is legacy?
+                    'rot': rigid_rot,
+                    'trans': rigid_trans,
+                    'deform_params': deform_params,
+                    'anchors': env.anchors, # this is legacy?
+                }
 
+                # episode data
+                action_pcd_arrays_sub = []
+                anchor_pcd_arrays_sub = []
+                state_arrays_sub = []
+                action_arrays_sub = []
 
-            # episode data
-            action_pcd_arrays_sub = []
-            anchor_pcd_arrays_sub = []
-            state_arrays_sub = []
-            action_arrays_sub = []
+                success = False
+                total_count_sub = 0
+                reward_sum = 0
 
-            success = False
-            total_count_sub = 0
-            reward_sum = 0
+                # rollout the policy for this hole
+                while True:
+                    # get action
+                    action = env.pseudo_expert_action(hole, rigid_rot=rigid_rot, rigid_trans=rigid_trans)
+                    total_count_sub += 1
 
+                    # downsample point clouds for demos (not tax3d demos)
+                    obs_action_pcd = obs['action_pcd']
+                    obs_anchor_pcd = obs['anchor_pcd']
+                    gripper_state = obs['gripper_state']
 
-            # get action
-            random_hole = np.random.randint(num_holes)
-            action = env.pseudo_expert_action(random_hole, rigid_rot=rigid_rot, rigid_trans=rigid_trans)
-            while True:
-                action = env.pseudo_expert_action(random_hole, rigid_rot=rigid_rot, rigid_trans=rigid_trans)
-                # increment total
-                total_count_sub += 1
+                    if obs_action_pcd.shape[0] > 512:
+                        obs_action_pcd = downsample_with_fps(obs_action_pcd, action_num_points)
+                    if obs_anchor_pcd.shape[0] > 512:
+                        obs_anchor_pcd = downsample_with_fps(obs_anchor_pcd, anchor_num_points)
 
-                # update episode data
+                    # update episode data
+                    action_pcd_arrays_sub.append(obs_action_pcd)
+                    anchor_pcd_arrays_sub.append(obs_anchor_pcd)
+                    state_arrays_sub.append(gripper_state)
+                    action_arrays_sub.append(action)
 
-                # expected keys from obs:
-                # 'action_pcd', 'anchor_pcd'
-                obs_action_pcd = obs['action_pcd']
-                obs_anchor_pcd = obs['anchor_pcd']
-                gripper_state = obs['gripper_state']
+                    # step environment
+                    obs, reward, done, info = env.step(action, action_type='position')
+                    reward_sum += reward
+                    if done:
+                        success = info['is_success']
+                        success_sub_list.append(int(success))
+                        break
 
-                # downsampling just for demos (not tax3d)
-                if obs_action_pcd.shape[0] > 512:
-                    obs_action_pcd = downsample_with_fps(obs_action_pcd, action_num_points)
-                if obs_anchor_pcd.shape[0] > 512:
-                    obs_anchor_pcd = downsample_with_fps(obs_anchor_pcd, anchor_num_points)
+                if success:
+                    print("Success!")
+                    # updating successful demo
+                    action_pcd_arrays_sub_list.extend(action_pcd_arrays_sub)
+                    anchor_pcd_arrays_sub_list.extend(anchor_pcd_arrays_sub)
+                    state_arrays_sub_list.extend(state_arrays_sub)
+                    action_arrays_sub_list.extend(action_arrays_sub)
+                    total_count_sub_list.append(total_count_sub)
+                    reward_sum_list.append(reward_sum)
 
-                action_pcd_arrays_sub.append(obs_action_pcd)
-                anchor_pcd_arrays_sub.append(obs_anchor_pcd)
-                state_arrays_sub.append(gripper_state)
-                action_arrays_sub.append(action)
-                # TODO: do we need to keep track of rewards?
+                    # updating successful tax3d demo
+                    tax3d_demo["flow"] = obs["action_pcd"] - tax3d_demo["action_pc"]
+                    tax3d_demo_list.append(tax3d_demo)
 
-                # obs, reward, done, info = env.step(action, action_type='velocity')
-                obs, reward, done, info = env.step(action, action_type='position')
-                reward_sum += reward
-                if done:
-                    success = info['is_success']
+                    # updating successful rollout video
+                    vid_frames = [
+                        Image.fromarray(frame) for frame in info["vid_frames"]
+                    ]
+                    rollout_vid_list.append(vid_frames)
+                else:
+                    print("Failed.")
                     break
 
-            if success:
-                print('Success!')
-                total_count += total_count_sub
-                episode_ends_arrays.append(total_count)
-                reward_list.append(reward_sum)
-                success_list.append(int(success))
+            # in order to save data, policy must be successful on all holes
+            if np.sum(success_sub_list) == num_holes:
+                # update episode ends, successes, and rewards
+                episode_ends_arrays.extend(np.cumsum(total_count_sub_list) + total_count)
+                total_count += np.sum(total_count_sub_list)
+                # update success and reward lists
+                success_list.extend(success_sub_list)
+                reward_list.extend(reward_sum_list)
 
-                action_pcd_arrays.extend(action_pcd_arrays_sub)
-                anchor_pcd_arrays.extend(anchor_pcd_arrays_sub)
-                state_arrays.extend(state_arrays_sub)
-                action_arrays.extend(action_arrays_sub)
+                # update action, anchor, state arrays
+                action_pcd_arrays.extend(action_pcd_arrays_sub_list)
+                anchor_pcd_arrays.extend(anchor_pcd_arrays_sub_list)
+                state_arrays.extend(state_arrays_sub_list)
+                action_arrays.extend(action_arrays_sub_list)
 
+                # save tax3d demos and rollout vids
+                for i in range(len(tax3d_demo_list)):
+                    tax3d_demo = tax3d_demo_list[i]
+                    vid_frames = rollout_vid_list[i]
 
-                # updating tax3d demo with flow, and saving
-                tax3d_demo['flow'] = obs["action_pcd"] - tax3d_demo['action_pc']
-                if save_tax3d:
                     np.savez(
-                        os.path.join(tax3d_save_dir, f'demo_{num_success}.npz'),
+                        os.path.join(tax3d_save_dir, f'demo_{num_success + i}.npz'),
                         **tax3d_demo
                     )
-
-                # saving rollout video
-                if save_rollout_vids:
-                    vid_frames = info['vid_frames']
-                    vid_frames_list = [
-                        Image.fromarray(frame) for frame in vid_frames
-                    ]
-                    vid_frames_list[0].save(
-                        os.path.join(rollout_vids_save_dir, f'demo_{num_success}.gif'),
+                    vid_frames[0].save(
+                        os.path.join(rollout_vids_save_dir, f'demo_{num_success + i}.gif'),
                         save_all=True,
-                        append_images=vid_frames_list[vid_speed::vid_speed],
+                        append_images=vid_frames[vid_speed::vid_speed],
                         duration=33,
                         loop=0,
                     )
-
-                num_success += 1
-                pbar.update(1)
+                num_success += num_holes
+                pbar.update(num_holes)
             else:
-                print('Failed episode, retrying...')
+                print("Failed on at least one hole, retrying...")
 
 
     ###############################
     # save data
     ###############################
-    if not save_demos:
-        cprint('Not saving demos', 'red')
-        exit(0)
-
     # create zarr file
     zarr_root = zarr.group(save_dir, overwrite=True)
     zarr_data = zarr_root.create_group('data')
