@@ -41,11 +41,11 @@ dataset:
   # root_dir: ~/Documents/data
   # root_dir: ~/Documents/data/tax3d
 
-  cloth_geometry: multi
+  cloth_geometry: single
   cloth_pose: fixed
   anchor_geometry: single
   anchor_pose: random
-  hole: double
+  hole: single
 
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}

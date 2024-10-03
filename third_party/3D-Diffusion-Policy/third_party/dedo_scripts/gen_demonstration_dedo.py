@@ -9,7 +9,7 @@ from tqdm import tqdm
 import zarr
 from termcolor import cprint
 
-from dedo.utils.args import get_args, args_postprocess
+from dedo.utils.args import get_args, args_postprocess, CAM_CONFIG_DIR
 from dedo.envs import DeformEnvTAX3D
 
 from PIL import Image
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     dedo_args.rollout_vid = True
     dedo_args.pcd = True
     dedo_args.logdir = 'rendered'
-    dedo_args.cam_config_path = '/home/eycai/Documents/dedo/dedo/utils/cam_configs/camview_0.json'
+    dedo_args.cam_config_path = f'{CAM_CONFIG_DIR}/camview_0.json'
     args_postprocess(dedo_args)
 
     # TODO: based on env name, there should be some logic here handling resetting of the environment
