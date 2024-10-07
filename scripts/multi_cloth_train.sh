@@ -67,6 +67,12 @@ elif [ $MODEL_TYPE == "regression_point" ]; then
 
   MODEL_PARAMS="model=regression model.type=point"
   DATASET_PARAMS="dataset=proc_cloth dataset.type=point dataset.scene=False dataset.world_frame=False"
+# relative frame cross point - HOI4D
+elif [ $MODEL_TYPE == "cross_point_relative_hoi4d" ]; then
+  echo "Training relative point model with command: $COMMAND."
+
+  MODEL_PARAMS="model=df_cross model.type=point"
+  DATASET_PARAMS="dataset=hoi4d dataset.type=point dataset.scene=False dataset.world_frame=False"
 else
   echo "Invalid model type."
 fi

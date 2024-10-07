@@ -32,6 +32,7 @@ from non_rigid.models.tax3d import (
 )
 
 from non_rigid.datasets.proc_cloth_flow import ProcClothFlowDataModule
+from non_rigid.datasets.hoi4d import HOI4DDataModule
 
 
 PROJECT_ROOT = str(pathlib.Path(__file__).parent.parent.parent.parent.resolve())
@@ -109,6 +110,8 @@ def create_datamodule(cfg):
     # check dataset name
     if cfg.dataset.name == "proc_cloth":
         datamodule_fn = ProcClothFlowDataModule
+    elif cfg.dataset.name == "hoi4d":
+        datamodule_fn = HOI4DDataModule
     else:
         raise ValueError(f"Invalid dataset name: {cfg.dataset.name}")
 

@@ -188,7 +188,7 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
         """
         Forward pass to compute diffusion training loss.
         """
-        ground_truth = batch[self.label_key].permute(0, 2, 1) # channel first
+        ground_truth = batch["cross_displacement"].permute(0, 2, 1) # channel first
         model_kwargs = self.get_model_kwargs(batch)
 
         # run diffusion
@@ -215,7 +215,7 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
             full_prediction: whether to return full prediction (flow and point, goal and world frame)
         """
         # TODO: replace bs with batch_size?
-        bs, sample_size = batch["pc_action"].shape[:2]
+        bs, sample_size = batch["start_pcd"].shape[:2]
         model_kwargs = self.get_model_kwargs(batch, num_samples)
 
         # generating latents and running diffusion
@@ -264,12 +264,12 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
             }
 
             # compute world frame predictions
-            pred_flow_world, pred_point_world, results_world = self.get_world_preds(
-                batch, num_samples, pc_action, pred_dict
-            )
-            pred_dict["flow"]["pred_world"] = pred_flow_world
-            pred_dict["point"]["pred_world"] = pred_point_world
-            pred_dict["results_world"] = results_world
+            # pred_flow_world, pred_point_world, results_world = self.get_world_preds(
+            #     batch, num_samples, pc_action, pred_dict
+            # )
+            pred_dict["flow"]["pred_world"] = pred_flow
+            pred_dict["point"]["pred_world"] = pred_point
+            pred_dict["results_world"] = results
             return pred_dict
 
     def predict_wta(self, batch, num_samples):
@@ -281,13 +281,13 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
             batch: the input batch
             num_samples: the number of samples to generate
         """
-        ground_truth = batch[self.label_key].to(self.device)
-        seg = batch["seg"].to(self.device)
+        ground_truth = batch["cross_displacement"].to(self.device)
+        # seg = batch["seg"].to(self.device)
 
         # re-shaping and expanding for winner-take-all
         bs = ground_truth.shape[0]
         ground_truth = expand_pcd(ground_truth, num_samples)
-        seg = expand_pcd(seg, num_samples)
+        # seg = expand_pcd(seg, num_samples)
 
         # generating diffusion predictions
         # TODO: this should probably specific full_prediction=False
@@ -297,7 +297,8 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
         pred = pred_dict[self.prediction_type]["pred"]
 
         # computing error metrics
-        rmse = flow_rmse(pred, ground_truth, mask=True, seg=seg).reshape(bs, num_samples)
+        # rmse = flow_rmse(pred, ground_truth, mask=True, seg=seg).reshape(bs, num_samples)
+        rmse = (((pred - ground_truth)**2).mean(axis=(1,2))**0.5).reshape(bs, num_samples)
         pred = pred.reshape(bs, num_samples, -1, 3)
 
         # computing winner-take-all metrics
@@ -387,7 +388,7 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
             ####################################################
             # logging visualizations
             ####################################################
-            self.log_viz_to_wandb(batch, pred_wta_dict, "train")
+            # self.log_viz_to_wandb(batch, pred_wta_dict, "train")
 
         return loss
 
@@ -415,7 +416,7 @@ class DenseDisplacementDiffusionModule(L.LightningModule):
         ####################################################
         # logging visualizations
         ####################################################
-        self.log_viz_to_wandb(batch, pred_wta_dict, f"val_{dataloader_idx}")
+        # self.log_viz_to_wandb(batch, pred_wta_dict, f"val_{dataloader_idx}")
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         """
@@ -483,13 +484,15 @@ class CrossDisplacementModule(DenseDisplacementDiffusionModule):
         super().__init__(network, cfg)
 
     def get_model_kwargs(self, batch, num_samples=None):
-        pc_action = batch["pc_action"]
-        pc_anchor = batch["pc_anchor"]
+        # pc_action = batch["pc_action"]
+        # pc_anchor = batch["pc_anchor"]
+        pc_action = batch["start_pcd"]
+        pc_anchor = batch["start_pcd"]
         if num_samples is not None:
             # expand point clouds if num_samples is provided; used for WTA predictions
             pc_action = expand_pcd(pc_action, num_samples)
             pc_anchor = expand_pcd(pc_anchor, num_samples)
-        
+
         pc_action = pc_action.permute(0, 2, 1) # channel first
         pc_anchor = pc_anchor.permute(0, 2, 1) # channel first
         model_kwargs = dict(x0=pc_action, y=pc_anchor)
