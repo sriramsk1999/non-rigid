@@ -1,83 +1,71 @@
-# python_ml_project_template
+# Installation #
 
-This is a template for a Python Machine Learning project with the following features:
+This repository can be conveniently installed as a Python package, and used in downstream projects. Note: all of the up-to-date code is currently being kept under the ``articulated`` branch. Things will be merged to ``main`` in the future.
 
-* [Weights and Biases](wandb.ai) support, for experiment tracking and visualization
-* [Hydra](https://hydra.cc/) support, for configuration management
-* [Pytorch Lightning](https://www.pytorchlightning.ai/) support, for training and logging
+## Create conda environment and install dependencies ##
 
-In addition, it contains all the good features from the original version of this repository (and is a proper Python package):
-
-* Installable via `pip install`. Anyone can point directly to this Github repository and install your project, either as a regular dependency or as an editable one.
-* Uses the new [PEP 518, officially-recommended pyproject.toml](https://pip.pypa.io/en/stable/reference/build-system/pyproject-toml/) structure for defining project structure and dependencies (instead of requirements.txt)
-* Nice, static documentation website support, using mkdocs-material. Structure can be found in `docs/`
-* `black` support by default, which is an opinionated code formatting tool
-* `pytest` support, which will automatically run tests found in the `tests/` directory
-* `mypy` support, for optional typechecking of type hints
-* `pre-commit` support, which runs various formatting modifiers on commit to clean up your dirty dirty code automatically.
-* Github Actions support, which runs the following:
-    * On a Pull Request: install dependencies, run style checks, run Python tests
-    * After merge: same a Pull Request, but also deploy the docs site to the projects Github Pages URL!!!!
-
-All that needs doing is replacing all occurances of `python_ml_project_template` and `python-ml-project-template` with the name of your package(including the folder `src/python_ml_project_template`), the rest should work out of the box!
-
-## Installation
-
-First, we'll need to install platform-specific dependencies for Pytorch. See [here](https://pytorch.org/get-started/locally/) for more details. For example, if we want to use CUDA 11.8 with Pytorch 2.
-
-```bash
-
-pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118/
-
+For now, all of the up-to-date TAX3D code is in the ``articulated`` branch.
+```
+git clone https://github.com/ey-cai/non-rigid.git
+cd non-rigid
+git checkout articulated
+conda create --name ENVNAME python=3.9 pip==23.3.1 setuptools==65.5
+```
+Before installing ``non-rigid``, you'll need to install versions of PyTorch, PyTorch Geometric, and PyTorch3D. We've provided specific GPU versions in ``requirements-gpu.txt``:
+```
+pip install -r requirements-gpu.txt
 ```
 
-Then, we can install the package itself:
-
-```bash
-
-pip install -e ".[develop,notebook]"
+## Install DEDO and 3D Diffusion Policy ##
 
 ```
+cd third_party/dedo
+pip install -e .
+cd ../..
 
-Then we install pre-commit hooks:
+cd third_party/3D-Diffusion-Policy/3D-Diffusion-Policy
+pip install -e .
+cd ../../..
+```
+Note: the TAX3D repo contains significant changes to the underlying code in both the DEDO and 3D Diffusion Policy repository (refer to the READMEs in the respective ``third_party/`` directories, will update in the future).
 
-```bash
 
-pre-commit install
+## Install ``non-rigid`` ##
+
+For now, the easiest thing to do is to install ``non-rigid`` in editable mode. This should install all of the additional required dependencies, as listed in ``pyproject.toml``.
 
 ```
+pip install -e .
+```
+And you're done!
 
-## Docker
-
-To build the docker image, run:
-
-```bash
-docker build -t <my_dockerhub_username>/python-ml-project-template .
+# Training Models #
+To train a model, run:
+```
+./multi_cloth_train.sh [GPU_INDEX] [MODEL_TYPE] [WANDB_MODE]
+```
+For example, to train a TAX3D-CD model and log results to WandB, run:
+```
+./multi_cloth_train.sh 0 cross_flow_relative online
+```
+Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
+```
+./multi_cloth_train.sh 0 cross_flow_relative online dataset.data_dir=[PATH_TO_YOUR_DATASET]
 ```
 
-To run the training script locally, run:
-
-```bash
-WANDB_API_KEY=<API_KEY>
-# Optional: mount current directory to run / test new code.
-# Mount data directory to access data.
-docker run \
-    -v $(pwd)/data:/opt/baeisner/data \
-    -v $(pwd)/logs:/opt/baeisner/logs \
-    --gpus all \
-    -e WANDB_API_KEY=$WANDB_API_KEY \
-    -e WANDB_DOCKER_IMAGE=python-ml-project-template \
-    python-ml-project-template python scripts/train.py \
-        dataset.data_dir=/root/data \
-        log_dir=/root/logs
+# Running Evaluations #
+To get coverage metrics, run:
+```
+./multi_cloth_eval.sh [GPU_INDEX] [MODEL_TYPE] [CHECKPOINT] coverage=True
+```
+For example:
+```
+./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True
+```
+Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
+```
+./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True dataset.data_dir=[PATH_TO_YOUR_DATASET]
 ```
 
-To push this:
-
-```bash
-docker push <my_dockerhub_username>/python-ml-project-template:latest
-```
-
-## Running on Clusters
-
-* [Autobot](autobot.md)
+# Running Policy Evaluations #
+TODO
