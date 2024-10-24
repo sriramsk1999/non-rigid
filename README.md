@@ -1,6 +1,10 @@
+# TAX3D: Non-rigid Relative Placement through 3D Dense Diffusion #
+Eric Cai, Octavian Donca, Ben Eisner, David Held
+
+
 # Installation #
 
-This repository can be conveniently installed as a Python package, and used in downstream projects. Note: all of the up-to-date code is currently being kept under the ``articulated`` branch. Things will be merged to ``main`` in the future.
+This repository can be conveniently installed as a Python package, and used in downstream projects.
 
 ## Create conda environment and install dependencies ##
 
@@ -42,30 +46,81 @@ And you're done!
 # Training Models #
 To train a model, run:
 ```
-./multi_cloth_train.sh [GPU_INDEX] [MODEL_TYPE] [WANDB_MODE]
+./train.sh [GPU_INDEX] [MODEL_TYPE] [WANDB_MODE] [ADDITIONAL_OVERRIDES]
 ```
-For example, to train a TAX3D-CD model and log results to WandB, run:
+For example, to train a TAX3D-CD model with our exact training parameters and log results to WandB, run:
 ```
-./multi_cloth_train.sh 0 cross_flow_relative online
+./train.sh 0 cross_flow_relative online dataset.train_size=400
+```
+In general, the following `MODEL_TYPE`s correspond to the following ablations/models in the paper:
+
+Ablation Name | `MODEL_TYPE` 
+-- | --
+**Scene Displacement/Point (SD/SP)** | `scene_flow`/`scene_point`
+**Cross Displacement/Point - World Frame (CD-W/CP-W)** | `cross_flow_absolute`/`cross_point_absolute`
+**Regression Displacement/Point (RD/RP)** | `regression_flow`/`regression_point`
+**TAX3D-CD/TAX3D-CP** | `cross_flow_relative`/`cross_point_relative`
+
+To run the **Cross Displacement/Point - No Action Context (CD-NAC/CP-NAC)** ablations, you will need to additionally disable the action context encoder. This can be done by overriding the model config from the command line:
+```
+# For CD-NAC
+./train.sh 0 cross_flow_relative online dataset.train_size=400 model.x0_encoder=null
+# For CP-NAC
+./train.sh 0 cross_point_relative online dataset.train_size=400 model.x0_encoder=null
 ```
 Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
 ```
-./multi_cloth_train.sh 0 cross_flow_relative online dataset.data_dir=[PATH_TO_YOUR_DATASET]
+./train.sh 0 cross_flow_relative online dataet.train_size=400 dataset.data_dir=[PATH_TO_YOUR_DATASET]
+```
+The exact config structure (and what exactly can be overrided in `[ADDITIONAL_OVERRIDES]`) can be seen in the config structure in the `configs/` directory.
+
+## Reproducing Experiments ##
+```
+# re-train TAX3D-CD model for Table 1: HangProcCloth-unimodal (swap out MODEL_TYPE appropriately)
+./train.sh 0 cross_flow_relative online dataset.train_size=400 dataset.data_dir=[PATH_TO_PROCCLOTH_DATASETS] dataset.cloth_geometry=multi dataset.hole=single
+
+# re-train TAX3D-CD model for Table 2: HangProcCloth-simple (swap out MODEL_TYPE appropriately)
+./train.sh 0 cross_flow_relative online dataset.train_size=400 dataset.data_dir=[PATH_TO_PROCCLOTH_DATASETS] dataset.cloth_geometry=single dataset.hole=single
+
+# re-train TAX3D-CD model for Table 3: HangProcCloth-multimodal (swap out MODEL_TYPE appropriately)
+./train.sh 0 cross_flow_relative online dataset.train_size=400 dataset.data_dir=[PATH_TO_PROCCLOTH_DATASETS] dataset.cloth_geometry=multi dataset.hole=double
+
+# re-train TAX3D-CD model for Table 4: HangBag (swap out MODEL_TYPE appropriately)
+./train.sh 0 cross_flow_relative online dataset.train_size=400 dataset.data_dir=[PATH_TO_HANGBAG_DATASETS] dataset.cloth_geometry=single dataset.hole=single
 ```
 
+
+
 # Running Evaluations #
-To get coverage metrics, run:
+
+## Point Prediction Evaluations ##
+To get point prediction errors, run:
 ```
-./multi_cloth_eval.sh [GPU_INDEX] [MODEL_TYPE] [CHECKPOINT] coverage=True
+./eval.sh [GPU_INDEX] [WANDB_CHECKPOINT_RUN_ID] [METRIC]=True
 ```
-For example:
+For example, to get point predictions results for a TAX3D-CD checkpoint with run id `gzc40qe1`, run:
 ```
-./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True
+# for coverage
+./eval.sh 0 gzc40qe1 coverage=True
+# for precision
+./eval.sh 0 gzc40qe1 precision=True
 ```
-Note: you may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
+Note: the evaluation script parses dataset and model configs from the original training run, and evaluates on the original dataset/model architecture by default.
+
+You may have to update the ``data_dir`` parameter in ``configs/dataset/proc_cloth.yaml`` to properly reflect the directory where your data is stored. This can also be done from the command line:
 ```
 ./multi_cloth_eval.sh 0 cross_flow_relative sfr4r4hs coverage=True dataset.data_dir=[PATH_TO_YOUR_DATASET]
 ```
-
-# Running Policy Evaluations #
-TODO
+## Policy Evaluations ##
+To get policy evaluations, run:
+```
+./eval_policy.sh tax3d [TASK_TYPE] [WANDB_CHECKPOINT_RUN_ID] [SEED] [GPU_INDEX]
+```
+For example, if the previous TAX3D-CD model was trained on a `HangProcCloth` task, one might run:
+```
+./eval_policy.sh tax3d dedo_proccloth gzc40qe1 1 0
+```
+Alternatively, if the model was trained for a `HangBag` task, then one should run:
+```
+./eval_policy.sh tax3d dedo_hangbag gzc40qe1 1 0
+```
