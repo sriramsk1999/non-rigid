@@ -45,7 +45,7 @@ And you're done!
 
 # Generating Datasets #
 
-For convenience, the exact datasets used to run all experiments in the paper can be found [here](https://www.dropbox.com/scl/fi/l0iz7fjs0ooewdbhv6x4w/tax3d_data.zip?rlkey=ccckswgltmsztbq99urw07k1t&st=c3oq7hyz&dl=0).
+For convenience, the exact datasets used to run all experiments in the paper can be found [here](https://drive.google.com/file/d/1qdkmRQ9FuAoc_A3vpVpB4JSDjVYqy2ae/view?usp=drive_link).
 
 As a reference, these are the commands to re-generate the datasets:
 ```
