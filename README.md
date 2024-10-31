@@ -1,6 +1,22 @@
-# TAX3D: Non-rigid Relative Placement through 3D Dense Diffusion #
-Eric Cai, Octavian Donca, Ben Eisner, David Held
+# TAX3D: Task-Specific Cross-Displacement through Dense Diffusion #
+This is the official code release for our CoRL 2024 paper:
 
+**Non-rigid Relative Placement through 3D Dense Diffusion**\
+*Eric Cai, Octavian Donca, Ben Eisner, David Held*\
+[arXiv](https://arxiv.org/abs/2410.19247) | [Project Page](https://sites.google.com/view/tax3d-corl-2024)
+```
+@inproceedings{cai2024tax3d,
+    title       = {Non-rigid Relative Placement through 3D Dense Diffusion},
+    author      = {Eric Cai and Octavian Donca and Ben Eisner and David Held},
+    booktitle   = {8th Annual Conference on Robot Learning},
+    year        = {2024},
+    url         = {https://arxiv.org/abs/2410.19247}
+}
+```
+Questions? Open an issue, or send an email to:
+```
+eycai [at] andrew [dot] cmu [dot] edu
+```
 
 # Installation #
 
